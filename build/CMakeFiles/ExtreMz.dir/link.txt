@@ -1,0 +1,2 @@
+/usr/bin/ar qc libExtreMz.a CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o
+/usr/bin/ranlib libExtreMz.a
