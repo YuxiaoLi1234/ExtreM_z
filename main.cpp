@@ -35,13 +35,7 @@ int main(int argc, char** argv) {
     }
 
     
-    // std::string filename = extractFilename(file_path);
-    // extern double* d_deltaBuffer;
-    // extern int width, height, depth, maxNeighbors, num_Elements, count_f_max, count_f_min, count_f_saddle;
-    // extern int* adjacency, *dec_vertex_type, *vertex_type, *all_max, *all_min, *all_saddle;
-    // extern double *decp_data, *input_data;
-    // extern double bound;
-    // extern std::vector<std::vector<int>> vertex_cells;
+    
     num_Elements = width*height*depth;
     std::cout<<"size is:"<<num_Elements<<std::endl;
     input_data = new double[num_Elements];      
@@ -57,10 +51,8 @@ int main(int argc, char** argv) {
     all_min = new int[num_Elements];
     all_saddle = new int[num_Elements];
     vertex_cells.resize(2 * (width - 1) * (height - 1));
-
-
     
-    getdata(file_path, er, bound, num_Elements);
+    getdata(file_path, er, num_Elements);
 
     
     
@@ -84,21 +76,36 @@ int main(int argc, char** argv) {
     int *cpMap = new int[num_Elements];
     std::vector<std::pair<int, int>> maximaTriplets;
     std::vector<std::pair<int, int>> dec_maximaTriplets;
-    computeCP(maximaTriplets, input_data, DS_M, AS_M, cpMap);
+    
+    // std::vector<int> saddles2, dec_saddles2;
+
+    std::vector<Branch> branches, dec_branches;
+    computeCP(maximaTriplets, saddleTriplets, input_data, DS_M, AS_M, saddles2, maximum, globalMin, 1);
+    compute_MergeT(branches, saddles2, maximum, maximaTriplets, saddleTriplets, decp_data, num_Elements);
+
+    return 0;
+    std::sort(saddleTriplets.begin(), saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+        return a.back() < b.back();  // 按最后一个元素升序排序
+    });
+
+   
 
     
-
-    
-    vertex_type = new int[num_Elements];
-    dec_vertex_type = new int[num_Elements];
     
 
     std::cout<<"preserving cp started! "<<std::endl;
     classifyAllVertices(vertex_type, input_data, 0);
+    classifyAllVertices(dec_vertex_type, decp_data, 0);
     std::cout<<"preserving cp started! "<<std::endl;
     // preserving the critical points, including saddles
     c_loops();
     std::cout<<"preserving cp ended!"<<std::endl;
+
+    or_saddle_max_map = new int[num_Elements * 4];
+    wrong_neighbors = new int[num_Elements]();
+    wrong_neighbors_index = new int[num_Elements]();
+    wrong_rank_max = new int[num_Elements]();
+    wrong_rank_max_index = new int[num_Elements * 2]();
 
     int *dec_DS_M = new int[num_Elements];
     int *dec_AS_M = new int[num_Elements];
@@ -108,24 +115,146 @@ int main(int argc, char** argv) {
     std::cout<<"compuattion of manifold over"<<std::endl;
 
     int *dec_cpMap = new int[num_Elements];
-    computeCP(dec_maximaTriplets, decp_data, dec_DS_M, dec_AS_M, dec_cpMap);
+    
+    computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin, 0);
     std::cout<<"cp extraction ended"<<std::endl;
 
-    std::cout<<"original: "<<std::endl;
-    for(auto item:maximaTriplets)
+
+
+    
+
+    std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+        return a.back() < b.back();  // 按最后一个元素升序排序
+    });
+
+    // compute the saddle labels for the original data;
+    # pragma omp parallel for 
+    for(int i = 0;i < saddleTriplets.size(); i++)
     {
-        std::cout<<item.first<<", "<<item.second<<std::endl;
+        int saddle = saddleTriplets[i][45];
+        compute_Max_for_Saddle(saddle, input_data );
+    }
+
+
+    number_of_false_cases = 0;
+    std::fill(wrong_neighbors, wrong_neighbors + num_Elements, 0);
+    for(int i = 0;i < saddleTriplets.size(); i++)
+    {
+        int saddle = saddleTriplets[i][45];
+        get_wrong_neighbors(saddle, number_of_false_cases, decp_data );
+    }
+
+    std::cout<<number_of_false_cases<<std::endl;
+
+    // get_false_criticle_points();
+    
+    while(number_of_false_cases > 0 || count_f_max > 0 || count_f_min > 0 || count_f_saddle > 0 || wrong_max_counter > 0)
+    {
+       
+        std::cout<<"whole loops:"<<number_of_false_cases<<", "<<count_f_max <<", "<<count_f_min << ", "<<count_f_saddle<<", "<<wrong_max_counter<<std::endl;
+        r_loops();
+        c_loops();
+        
+
+        ComputeDescendingManifold(decp_data, dec_DS_M);
+        ComputeAscendingManifold(decp_data, dec_AS_M);
+        computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin, 0);
+        std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+            return a.back() < b.back();  // 按最后一个元素升序排序
+        });
+
+        // compute the saddle labels for the decp_data;
+
+        number_of_false_cases = 0;
+        std::fill(wrong_neighbors, wrong_neighbors + num_Elements, 0);
+        for(int i = 0;i < saddleTriplets.size(); i++)
+        {
+            int saddle = saddleTriplets[i][45];
+            get_wrong_neighbors(saddle, number_of_false_cases, decp_data);
+        }
+        
+        if(number_of_false_cases == 0)
+        {
+            ComputeDescendingManifold(decp_data, dec_DS_M);
+            ComputeAscendingManifold(decp_data, dec_AS_M);
+            computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin, 0);
+            std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+                return a.back() < b.back();  // 按最后一个元素升序排序
+            });
+            s_loops();
+            std::cout<<"s_loops completed"<<std::endl;
+        }
+        
+
+        c_loops();
+
+        ComputeDescendingManifold(decp_data, dec_DS_M);
+        ComputeAscendingManifold(decp_data, dec_AS_M);
+        computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin, 0);
+        std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+            return a.back() < b.back();  // 按最后一个元素升序排序
+        });
+
+        // compute the saddle labels for the decp_data;
+
+        number_of_false_cases = 0;
+        std::fill(wrong_neighbors, wrong_neighbors + num_Elements, 0);
+        for(int i = 0;i < saddleTriplets.size(); i++)
+        {
+            int saddle = saddleTriplets[i][45];
+            get_wrong_neighbors(saddle, number_of_false_cases, decp_data);
+        }
+
+        if(number_of_false_cases == 0)
+        {
+            ComputeDescendingManifold(decp_data, dec_DS_M);
+            ComputeAscendingManifold(decp_data, dec_AS_M);
+            computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin);
+            std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+                return a.back() < b.back();  // 按最后一个元素升序排序
+            });
+            s_loops();
+        }
+
+        c_loops();
+
+        ComputeDescendingManifold(decp_data, dec_DS_M);
+        ComputeAscendingManifold(decp_data, dec_AS_M);
+        computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin);
+        std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+            return a.back() < b.back();  // 按最后一个元素升序排序
+        });
+
+        // compute the saddle labels for the decp_data;
+
+        number_of_false_cases = 0;
+        std::fill(wrong_neighbors, wrong_neighbors + num_Elements, 0);
+        for(int i = 0;i < saddleTriplets.size(); i++)
+        {
+            int saddle = saddleTriplets[i][45];
+            get_wrong_neighbors(saddle, number_of_false_cases, decp_data);
+        }
+        if(number_of_false_cases == 0)
+        {
+            ComputeDescendingManifold(decp_data, dec_DS_M);
+            ComputeAscendingManifold(decp_data, dec_AS_M);
+            computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin);
+            std::sort(dec_saddleTriplets.begin(), dec_saddleTriplets.end(), [](const std::array<int, 46>& a, const std::array<int, 46>& b) {
+                return a.back() < b.back();  // 按最后一个元素升序排序
+            });
+            get_wrong_index_max();
+        }
         
     }
 
-    std::cout<<"decp: "<<std::endl;
-    for(auto item:dec_maximaTriplets)
+    for(int i = 0; i<saddleTriplets.size();i++)
     {
-        std::cout<<item.first<<", "<<item.second<<std::endl;
-        
+        if(saddleTriplets[i][saddleTriplets[i][44]-1] != dec_saddleTriplets[i][saddleTriplets[i][44]-1]) std::cout<<i<<std::endl;
     }
+
     
-    
+    computeCP(maximaTriplets, saddleTriplets, input_data, DS_M, AS_M, saddles2, maximum, globalMin, 1);
+    compute_MergeT(branches, saddles2, maximum, maximaTriplets, saddleTriplets, decp_data, num_Elements);
 
     delete[] input_data;
     delete[] decp_data;

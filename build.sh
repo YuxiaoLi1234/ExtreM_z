@@ -26,7 +26,7 @@ fi
 echo "Compiling main.cpp..."
 cd ..
 
-g++ -std=c++17 ./main.cpp -o main_program -I${INSTALL_PREFIX}/include/include/api -L${INSTALL_PREFIX}/lib64 -lExtreMz -lsz -lzstd -fopenmp
+g++ -std=c++17 ./main.cpp -o main -I${INSTALL_PREFIX}/include/include/api -L${INSTALL_PREFIX}/lib64 -lExtreMz -lsz -lzstd -fopenmp
 
 if [ $? -eq 0 ]; then
     echo "main_program compiled successfully."
