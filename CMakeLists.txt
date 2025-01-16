@@ -6,8 +6,8 @@ include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
 pkg_search_module(ZSTD IMPORTED_TARGET libzstd)
 
+# Enable CUDA support
 option(ENABLE_CUDA "Enable CUDA acceleration" OFF)
-
 if (ENABLE_CUDA)
     find_package(CUDAToolkit)
     if (CUDAToolkit_FOUND)
@@ -16,14 +16,16 @@ if (ENABLE_CUDA)
     else()
         message(WARNING "CUDA not found, disabling CUDA acceleration.")
         set(USE_CUDA FALSE)
-    endif() # 结束 CUDAToolkit_FOUND 检查
-endif() # 结束 ENABLE_CUDA 检查
+    endif()
+endif()
 
-option(ENABLE_OPENMP "Enable OpenMP acceleration" OFF)
+# Enable OpenMP support
+option(ENABLE_OPENMP "Enable OpenMP acceleration" ON)
 if (ENABLE_OPENMP)
     find_package(OpenMP)
     if (OpenMP_CXX_FOUND)
         set(USE_OPENMP TRUE)
+        message(STATUS "OpenMP support enabled in ExtreMz.")
     else()
         message(WARNING "OpenMP not found, disabling OpenMP acceleration.")
         set(USE_OPENMP FALSE)
@@ -34,24 +36,29 @@ set(SRC_FILES
     ./src/ExtreM.cpp
 )
 
-
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_library(ExtreMz STATIC ${SRC_FILES})
 
 target_compile_features(ExtreMz PRIVATE cxx_std_17)
 
-# target_include_directories(ExtreMz PUBLIC
-#     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-#     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src> 
-#     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-# )
 target_include_directories(ExtreMz PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
-
 target_link_libraries(ExtreMz PRIVATE PkgConfig::ZSTD)
+
+# Link OpenMP if enabled
+if (USE_OPENMP)
+    target_link_libraries(ExtreMz PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(ExtreMz PRIVATE ENABLE_OPENMP)
+endif()
+
+# Link CUDA if enabled
+if (USE_CUDA)
+    target_link_libraries(ExtreMz PRIVATE CUDA::cudart)
+    target_compile_definitions(ExtreMz PRIVATE ENABLE_CUDA)
+endif()
 
 install(TARGETS ExtreMz
         EXPORT ExtreMzTargets
@@ -66,7 +73,6 @@ install(EXPORT ExtreMzTargets
         FILE ExtreMzTargets.cmake
         NAMESPACE ExtreMz::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ExtreMz)
-
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(

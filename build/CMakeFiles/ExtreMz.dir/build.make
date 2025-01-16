@@ -73,15 +73,15 @@ CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o: CMakeFiles/ExtreMz.dir/flags.make
 CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o: ../src/ExtreM.cpp
 CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o: CMakeFiles/ExtreMz.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/global/homes/y/yuxiaoli/ExtreM_z/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o -MF CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o.d -o CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o -c /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o -MF CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o.d -o CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o -c /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp
 
 CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp > CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp > CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.i
 
 CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp -o CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp -o CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.s
 
 # Object files for target ExtreMz
 ExtreMz_OBJECTS = \

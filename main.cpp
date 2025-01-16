@@ -7,7 +7,7 @@
 #include <omp.h>
 
 int main(int argc, char** argv) {
-    omp_set_num_threads(44);
+    omp_set_num_threads(128);
     // std::cout.precision(std::numeric_limits<double>::max_digits10);
     std::string dimension = argv[1];
     double er = std::stod(argv[2]);
@@ -40,6 +40,7 @@ int main(int argc, char** argv) {
     std::cout<<"size is:"<<num_Elements<<std::endl;
     input_data = new double[num_Elements];      
     decp_data = new double[num_Elements];  
+    decp_data_copy = new double[num_Elements]; 
 
     d_deltaBuffer = new double[num_Elements];
     count_f_max = 0;
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
     all_min = new int[num_Elements];
     all_saddle = new int[num_Elements];
     vertex_cells.resize(2 * (width - 1) * (height - 1));
+    delta_counter.resize(num_Elements, 0);
     lowerStars = new int[(maxNeighbors+1) * num_Elements];
     upperStars = new int[(maxNeighbors+1) * num_Elements];
 
@@ -103,8 +105,12 @@ int main(int argc, char** argv) {
     or_saddle_max_map = new int[num_Elements * 4];
     wrong_neighbors = new int[num_Elements]();
     wrong_neighbors_index = new int[num_Elements]();
+
     wrong_rank_max = new int[num_Elements]();
     wrong_rank_max_index = new int[num_Elements * 2]();
+
+    wrong_rank_max_2 = new int[num_Elements]();
+    wrong_rank_max_index_2 = new int[num_Elements * 2]();
 
     int *dec_DS_M = new int[num_Elements];
     int *dec_AS_M = new int[num_Elements];
@@ -147,10 +153,10 @@ int main(int argc, char** argv) {
 
     // get_false_criticle_points();
     
-    while(number_of_false_cases > 0 || count_f_max > 0 || count_f_min > 0 || count_f_saddle > 0 || wrong_max_counter > 0)
+    while(number_of_false_cases > 0 || count_f_max > 0 || count_f_min > 0 || count_f_saddle > 0 || wrong_max_counter > 0 || wrong_max_counter_2 > 0)
     {
        
-        std::cout<<"whole loops:"<<number_of_false_cases<<", "<<count_f_max <<", "<<count_f_min << ", "<<count_f_saddle<<", "<<wrong_max_counter<<std::endl;
+        std::cout<<"whole loops:"<<number_of_false_cases<<", "<<count_f_max <<", "<<count_f_min << ", "<<count_f_saddle<<", "<<wrong_max_counter<<", "<<wrong_max_counter_2<<std::endl;
         r_loops();
         c_loops();
         
@@ -181,7 +187,6 @@ int main(int argc, char** argv) {
                 return a.back() < b.back();  // 按最后一个元素升序排序
             });
             s_loops();
-            std::cout<<"s_loops completed"<<std::endl;
         }
         
 
@@ -260,8 +265,18 @@ int main(int argc, char** argv) {
     computeCP(dec_maximaTriplets, dec_saddleTriplets, decp_data, dec_DS_M, dec_AS_M, dec_saddles2, dec_maximum, dec_globalMin, 1);
     compute_MergeT(dec_branches, dec_saddles2, dec_maximum, dec_maximaTriplets, dec_saddleTriplets, decp_data, num_Elements, dec_globalMin);
 
+    double cnt = 0.0;
+    for(int i = 0; i<num_Elements; i++)
+    {
+        if(decp_data[i] != decp_data_copy[i]) cnt++;
+    }
+    std::cout<<cnt/num_Elements<<std::endl;
+
+    
+    for(auto branch: bran)
     delete[] input_data;
     delete[] decp_data;
+    delete[] decp_data_copy;
 
     return 0;
 }

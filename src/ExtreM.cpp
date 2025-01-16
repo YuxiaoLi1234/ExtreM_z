@@ -9,6 +9,8 @@
 #include <set>
 #include <cfloat>
 
+#include <atomic>
+
 extern "C" {
     int directions[78] = {
         1, 0, 0, 
@@ -32,15 +34,15 @@ extern "C" {
     double* d_deltaBuffer;
     int width, height, depth, maxNeighbors, num_Elements;
     int* adjacency;
-    double *decp_data, *input_data;
+    double *decp_data, *input_data, *decp_data_copy;
     double bound;
     int *dec_vertex_type, *vertex_type;
-    int count_f_max, count_f_min, count_f_saddle, number_of_false_cases, wrong_max_counter, globalMin, dec_globalMin;
+    int count_f_max, count_f_min, count_f_saddle, number_of_false_cases, wrong_max_counter, wrong_max_counter_2, globalMin, dec_globalMin;
     int *all_max, *all_min, *all_saddle;
     std::vector<std::vector<int>> vertex_cells;
-    int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index;
+    int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index, *wrong_rank_max_2, *wrong_rank_max_index_2;
     std::vector<std::array<int, 46>> saddleTriplets, dec_saddleTriplets;
-    std::vector<int> saddles2, maximum, dec_saddles2, dec_maximum;
+    std::vector<int> saddles2, maximum, dec_saddles2, dec_maximum, delta_counter;
     int *lowerStars, *upperStars, *dec_lowerStars, *dec_upperStars;
     int direction_to_index_mapping[26][3] = 
     {
@@ -58,6 +60,24 @@ extern "C" {
         {-1, 1, 1}, {-1, 1, -1},
         {-1, -1, 1}, {-1, -1, -1}
     };
+
+    void Branch::print() const {
+        std::cout << "Branch:" << std::endl;
+
+        // 打印顶点信息
+        std::cout << "  Vertices:" << std::endl;
+        for (const auto &vertex : vertices) {
+            std::cout << "    Order: " << vertex.first << ", GlobalId: " << vertex.second << std::endl;
+        }
+
+        // 打印父分支信息
+        if (parentBranch) {
+            std::cout << "  Parent Branch's first vertex GlobalId: "
+                    << parentBranch->vertices[0].second << std::endl;
+        } else {
+            std::cout << "  No Parent Branch" << std::endl;
+        }
+    }
 
     void getdata(const std::string &filename, 
                 const double er, 
@@ -94,7 +114,8 @@ extern "C" {
         char *compressedData = SZ_compress(conf, input_data, cmpSize);
 
         SZ_decompress(conf, compressedData, cmpSize, decp_data);
-        
+        std::copy(decp_data, decp_data + data_size, decp_data_copy);
+
         delete[] compressedData;
 
         
@@ -134,6 +155,7 @@ extern "C" {
             }
         }
 
+        return 0;
     };
 
     int ComputeAscendingManifold(const double *offset, 
@@ -163,7 +185,7 @@ extern "C" {
                 next_id = AS_M[current_id];
             }
         }
-
+        return 0;
     };
 
     void computeAdjacency() {
@@ -466,6 +488,7 @@ extern "C" {
         for(int tid = 0; tid < num_Elements; tid++)
         {
             d_deltaBuffer[tid] = -4.0 * bound;
+            delta_counter[tid] = 0;
         }    
     }
 
@@ -482,34 +505,36 @@ extern "C" {
 
         return false; 
     }
+    double atomicCASDouble(double* address, double expected, double desired) {
+        // reinterpret_cast 将 double 转换为 uint64_t 以便原子操作
+        uint64_t* address_as_ull = reinterpret_cast<uint64_t*>(address);
+        uint64_t expected_ull = *reinterpret_cast<uint64_t*>(&expected);
+        uint64_t desired_ull = *reinterpret_cast<uint64_t*>(&desired);
 
-    bool atomicCASDouble(double* ptr, double old_val, double new_val) {
-        // 将 double 指针转换为 uint64_t 指针
-        bool swapped = false;
-        #pragma omp critical
-        {
-            if (*ptr == old_val) {
-                *ptr = new_val;
-                swapped = true;
-            }
-        }
-        return swapped;
+        // 使用 std::atomic_compare_exchange 强制类型转换
+        std::atomic<uint64_t>* atomic_address = reinterpret_cast<std::atomic<uint64_t>*>(address_as_ull);
+        atomic_address->compare_exchange_strong(expected_ull, desired_ull);
+
+        // 返回操作前的值
+        return *reinterpret_cast<double*>(&expected_ull);
     }
 
-
-    int swap(int index, double delta){
+    void swap(int index, double delta) {
         int update_successful = 0;
-        double oldValue = d_deltaBuffer[index];
-        double new_edit = delta;
-        double old_edit = d_deltaBuffer[index];
-        while (new_edit > old_edit) {
-            if (atomicCASDouble(&d_deltaBuffer[index],old_edit, new_edit)) {
-                break;
-            }
-            old_edit = d_deltaBuffer[index];
-        }
 
-        return 0;
+        while (update_successful == 0) {
+            double current_value = d_deltaBuffer[index];
+
+            if (-delta > current_value) {
+                
+                double swapped = atomicCASDouble(&d_deltaBuffer[index], current_value, delta);
+                if (swapped == current_value) {
+                    update_successful = 1; 
+                }
+            } else {
+                update_successful = 1; 
+            }
+        }
     }
 
     void c_loop(int index, int direction = 0)
@@ -662,39 +687,7 @@ extern "C" {
                     std::vector<int> upperStar(dec_upperStars + (maxNeighbors+1) * i, dec_upperStars + (maxNeighbors+1) * i + dec_upperStars[i * (maxNeighbors + 1) + maxNeighbors]);
                     std::vector<int> or_lowerStar(lowerStars + (maxNeighbors+1) * i, lowerStars + (maxNeighbors+1) * i + lowerStars[i * (maxNeighbors + 1) + maxNeighbors]);
                     std::vector<int> or_upperStar(upperStars + (maxNeighbors+1) * i, upperStars + (maxNeighbors+1) * i + upperStars[i * (maxNeighbors + 1) + maxNeighbors]);
-                    // for (int d =0;d<maxNeighbors;d++) {
-                    //     if(adjacency[i*maxNeighbors+d]==-1) continue;
-
-                    //     int r = adjacency[i*maxNeighbors+d];
-                        
-                        
-                    //     if (decp_data[r] < currentHeight) {
-                    //         lowerStar.emplace_back(r);
-                    //     } 
-                    //     else if (decp_data[r] == currentHeight and r<i) {
-                    //         lowerStar.emplace_back(r);
-                    //     }
-
-                    //     if (decp_data[r] > currentHeight) {
-                    //         upperStar.emplace_back(r);
-                    //     } else if (decp_data[r] == currentHeight and r>i) {
-                    //         upperStar.emplace_back(r);
-                    //     }
-
-                    //     if (input_data[r] < or_currentHeight) {
-                    //         or_lowerStar.emplace_back(r);
-                    //     } 
-                    //     else if (input_data[r] == or_currentHeight and r<i) {
-                    //         or_lowerStar.emplace_back(r);
-                    //     }
-
-                    //     if (input_data[r] > or_currentHeight) {
-                    //         or_upperStar.emplace_back(r);
-                    //     } else if (input_data[r] == or_currentHeight and r>i) {
-                    //         or_upperStar.emplace_back(r);
-                    //     }
-
-                    // }
+                    
                 
                     if(areVectorsDifferent(lowerStar, or_lowerStar) or areVectorsDifferent(upperStar, or_upperStar)){
                         all_saddle[count_f_saddle] = i;
@@ -799,61 +792,15 @@ extern "C" {
         std::vector<int> upperStar(dec_upperStars + (maxNeighbors+1) * index, dec_upperStars + (maxNeighbors+1) * index + dec_upperStars[index * (maxNeighbors + 1) + maxNeighbors]);
         std::vector<int> o_lowerStar(lowerStars + (maxNeighbors+1) * index, lowerStars + (maxNeighbors+1) * index + lowerStars[index * (maxNeighbors + 1) + maxNeighbors]);
         std::vector<int> o_upperStar(upperStars + (maxNeighbors+1) * index, upperStars + (maxNeighbors+1) * index + upperStars[index * (maxNeighbors + 1) + maxNeighbors]);
-        // double currentHeight = decp_data[index];
-        // for (int d =0;d<maxNeighbors;d++) {
-            
-            
-        //     if(adjacency[index*maxNeighbors+d]==-1) continue;
-        //     int r = adjacency[index*maxNeighbors+d];
-        //         if (decp_data[r] < currentHeight) {
-        //             lowerStar.emplace_back(r);
-        //         } 
-        //         else if (decp_data[r] == currentHeight and r<index) {
-        //             lowerStar.emplace_back(r);
-        //         }
-
-        //         if (decp_data[r] > currentHeight) {
-        //             upperStar.emplace_back(r);
-        //         } 
-        //         else if (decp_data[r] == currentHeight and r>index) {
-        //             upperStar.emplace_back(r);
-        //         }
-
-        // }
         
-
-        // std::vector<int > o_lowerStar, o_upperStar;
-        // currentHeight = input_data[index];
-        // for (int d =0;d<maxNeighbors;d++) {
-            
-            
-        //     if(adjacency[index*maxNeighbors+d]==-1) continue;
-        //     int r = adjacency[index*maxNeighbors+d];
-
-        //         if (input_data[r] < currentHeight) {
-        //             o_lowerStar.emplace_back(r);
-        //         } 
-        //         else if (input_data[r] == currentHeight and r<index) {
-        //             o_lowerStar.emplace_back(r);
-        //         }
-
-        //         if (input_data[r] > currentHeight) {
-        //             o_upperStar.emplace_back(r);
-        //         } 
-        //         else if (input_data[r] == currentHeight and r>index) {
-        //             o_upperStar.emplace_back(r);
-        //         }
-
-        // }
         
         if(areVectorsDifferent(lowerStar, o_lowerStar)){
             std::vector<int> diff = findDifferences(lowerStar,o_lowerStar);
-        
-            // if(lowerStar.size()<=o_lowerStar.size() || lowerWedges.size()<=o_lowerWedges.size()){
-                // decrease value of the negative lower star.
+            
+            // decrease value of the negative lower star.
                 
             for(int i:diff){
-                delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
+                delta = (input_data[i]-bound) - decp_data[i];
                 double oldValue = d_deltaBuffer[i];
                 if (delta > oldValue) {
                     swap(i, delta);
@@ -863,37 +810,13 @@ extern "C" {
 
             diff = findDifferences(o_lowerStar, lowerStar);
             if(diff.size() > 0){
-                delta = (input_data[index]-bound+decp_data[index])/2 - decp_data[index];
+                delta = (input_data[index]-bound) - decp_data[index];
                 double oldValue = d_deltaBuffer[index];
                 if (delta > oldValue) {
                     swap(index, delta);
                 } 
             }
-            
         
-        }
-        if(areVectorsDifferent(upperStar, o_upperStar)){
-            std::vector<int> diff = findDifferences(o_upperStar, upperStar);
-            for(int i:diff){
-                
-                delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
-                
-                if(decp_data[i]>decp_data[index] or (decp_data[i]==decp_data[index] and i>index)){
-                    delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
-                    double oldValue = d_deltaBuffer[i];
-                    if (delta > oldValue) {
-                        swap(i, delta);
-                    }  
-                }
-            }
-            diff = findDifferences(upperStar, o_upperStar);
-            if(diff.size() > 0){
-                delta = (input_data[index]-bound+decp_data[index])/2 - decp_data[index];
-                double oldValue = d_deltaBuffer[index];
-                if (delta > oldValue) {
-                    swap(index, delta);
-                } 
-            }
         }
 
         return;
@@ -907,8 +830,14 @@ extern "C" {
         {
             if(d_deltaBuffer[tid] != -4.0 * bound){
                 
-                if(std::abs(d_deltaBuffer[tid]) > 1e-10 && std::abs(input_data[tid] - decp_data[tid] - d_deltaBuffer[tid])<=bound) decp_data[tid] += d_deltaBuffer[tid];
-                else decp_data[tid] = input_data[tid] - bound;
+                if(std::abs(d_deltaBuffer[tid]) > 1e-15 && delta_counter[tid]<5 && std::abs(input_data[tid] - decp_data[tid] - d_deltaBuffer[tid])<=bound) {
+                    decp_data[tid] += d_deltaBuffer[tid];
+                    delta_counter[tid] += 1;
+                }
+                else{
+                    decp_data[tid] = input_data[tid] - bound;
+                    delta_counter[tid] = 6;
+                }
                 
             }
         }
@@ -934,7 +863,7 @@ extern "C" {
         get_fcp += duration.count();
         
         while(count_f_max>0 or count_f_min>0 or count_f_saddle>0){
-            std::cout<<"c_loops: "<<count_f_max<<", "<<count_f_min<<", "<<count_f_saddle<<std::endl;
+            // std::cout<<"c_loops: "<<count_f_max<<", "<<count_f_min<<", "<<count_f_saddle<<std::endl;
             
             start = std::chrono::high_resolution_clock::now();
             init_delta();
@@ -990,12 +919,12 @@ extern "C" {
 
         }
         float w_time = vertexClassification + get_fcp + c_loopt + init_deltat + apply_deltat;
-        std::cout<<"time ratio: "<<std::endl;
-        std::cout<<"classification: "<< vertexClassification/w_time<<std::endl;
-        std::cout<<"getfcp: "<< get_fcp/w_time<<std::endl;
-        std::cout<<"cloop: "<< c_loopt/w_time<<std::endl;
-        std::cout<<"init_delta: "<< init_deltat/w_time<<std::endl;
-        std::cout<<"apply_delta: "<< apply_deltat/w_time<<std::endl;
+        // std::cout<<"time ratio: "<<std::endl;
+        // std::cout<<"classification: "<< vertexClassification/w_time<<std::endl;
+        // std::cout<<"getfcp: "<< get_fcp/w_time<<std::endl;
+        // std::cout<<"cloop: "<< c_loopt/w_time<<std::endl;
+        // std::cout<<"init_delta: "<< init_deltat/w_time<<std::endl;
+        // std::cout<<"apply_delta: "<< apply_deltat/w_time<<std::endl;
     }
 
     void get_vertex_traingle(){
@@ -1278,30 +1207,39 @@ extern "C" {
         std::vector<int> saddles1;
 
         int nSaddle1 = 0;
-        #pragma omp parallel for reduction(+:nSaddle2, nMax, nSaddle1)
-        for(int VertexId = 0; VertexId < data_size; VertexId ++){
-            
-            int type[2];
-            classifyVertex(VertexId, offset, desManifold, ascManifold, type);
-            if(type[0] == 2 || type[1] == 2)
-            {
-                nSaddle2++;
-                saddles2.push_back(VertexId);
-            }
-            
-            if(type[0] == 1 || type[1] == 1)
-            {
-                nSaddle1++;
-                saddles1.push_back(VertexId);
+        #pragma omp parallel reduction(+:nSaddle2, nMax, nSaddle1)
+        {
+            std::vector<int> local_saddles2, local_saddles1, local_maximum;
+
+            #pragma omp for
+            for(int VertexId = 0; VertexId < data_size; VertexId++) {
+                int type[2];
+                classifyVertex(VertexId, offset, desManifold, ascManifold, type);
+
+                if(type[0] == 2 || type[1] == 2) {
+                    nSaddle2++;
+                    local_saddles2.push_back(VertexId);
+                }
+
+                if(type[0] == 1 || type[1] == 1) {
+                    nSaddle1++;
+                    local_saddles1.push_back(VertexId);
+                }
+
+                if(type[0] == 4) {
+                    nMax++;
+                    local_maximum.push_back(VertexId);
+                }
             }
 
-            if(type[0] == 4)
+            // 合并结果
+            #pragma omp critical
             {
-                nMax++;
-                maximum.push_back(VertexId);
+                saddles2.insert(saddles2.end(), local_saddles2.begin(), local_saddles2.end());
+                saddles1.insert(saddles1.end(), local_saddles1.begin(), local_saddles1.end());
+                maximum.insert(maximum.end(), local_maximum.begin(), local_maximum.end());
             }
         }
-       
         
         
         std::sort(saddles2.begin(), saddles2.end(), [&offset](int v, int u) {
@@ -1655,7 +1593,10 @@ extern "C" {
 
     void get_wrong_index_max(){
         wrong_max_counter = 0;
+        wrong_max_counter_2 = 0;
         std::fill(wrong_rank_max, wrong_rank_max + num_Elements, 0);
+        std::fill(wrong_rank_max_2, wrong_rank_max_2 + num_Elements, 0);
+
         for(int i = 0; i<dec_saddleTriplets.size(); i++)
         {
 
@@ -1667,10 +1608,22 @@ extern "C" {
                     wrong_rank_max_index[wrong_max_counter * 2] = saddleTriplets[i][0];
                     wrong_rank_max_index[wrong_max_counter * 2 + 1] = dec_saddleTriplets[i][0];
                     wrong_rank_max[maxId] = 1;
-                    // std::cout<<saddleTriplets[i][0]<<", "<<dec_saddleTriplets[i][0]<<std::endl;
-                    // std::cout<<input_data[saddleTriplets[i][0]]<<", "<<input_data[dec_saddleTriplets[i][0]]<<std::endl;
-                    // std::cout<<decp_data[saddleTriplets[i][0]]<<", "<<decp_data[dec_saddleTriplets[i][0]]<<std::endl;
+                    
                     wrong_max_counter ++;
+                    
+                }
+            }
+
+            if(saddleTriplets[i][saddleTriplets[i][44]-1] != dec_saddleTriplets[i][dec_saddleTriplets[i][44]-1])
+            {
+                int maxId = saddleTriplets[i][saddleTriplets[i][44]-1];
+                if(wrong_rank_max_2[maxId] == 0)
+                {
+                    wrong_rank_max_index_2[wrong_max_counter_2 * 2] = saddleTriplets[i][saddleTriplets[i][44]-1];
+                    wrong_rank_max_index_2[wrong_max_counter_2 * 2 + 1] = dec_saddleTriplets[i][dec_saddleTriplets[i][44]-1];
+                    wrong_rank_max_2[maxId] = 1;
+                    
+                    wrong_max_counter_2 ++;
                     
                 }
             }
@@ -1678,23 +1631,44 @@ extern "C" {
         }
     }
 
-    void fix_wrong_index_max(int true_index, int false_index){
+    void fix_wrong_index_max(int true_index, int false_index, int direction = 0){
         double tmp_delta;
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
-        while(tmp_true_value > tmp_false_value || 
-                (tmp_true_value == tmp_false_value && true_index > false_index)){
-            tmp_delta = (input_data[true_index] - bound + tmp_true_value) / 2 - tmp_true_value;
-            tmp_true_value += tmp_delta;
+        if(direction == 0){
+            while(tmp_true_value > tmp_false_value || 
+                    (tmp_true_value == tmp_false_value && true_index > false_index)){
+                tmp_delta = (input_data[true_index] - bound + tmp_true_value) / 2 - tmp_true_value;
+                tmp_true_value += tmp_delta;
+            }
+            tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
+            double d = tmp_true_value - decp_data[true_index];
+        
+            double oldValue = d_deltaBuffer[true_index];
+            
+            if (d > oldValue) {
+                swap(true_index, d);
+            }  
+        }
+
+        else if(direction == 1){
+            while(tmp_true_value < tmp_false_value || 
+                    (tmp_true_value == tmp_false_value && true_index < false_index)){
+                tmp_delta = (input_data[false_index] - bound + tmp_false_value) / 2 - tmp_false_value;
+                tmp_false_value += tmp_delta;
+            }
+            tmp_false_value = (input_data[false_index] - bound + decp_data[false_index]) / 2.0;
+            double d = tmp_false_value - decp_data[false_index];
+        
+            double oldValue = d_deltaBuffer[false_index];
+            
+            if (d > oldValue) {
+                swap(false_index, d);
+            } 
         }
         
-        double d = tmp_true_value - decp_data[true_index];
         
-        double oldValue = d_deltaBuffer[true_index];
         
-        if (d > oldValue) {
-            swap(true_index, d);
-        }  
 
         return;
     }
@@ -1710,6 +1684,15 @@ extern "C" {
             int false_index = wrong_rank_max_index[i*2+1];
             
             fix_wrong_index_max(true_index, false_index);
+        }
+
+        for(int i = 0; i < wrong_max_counter_2; i++)
+        {
+            
+            int true_index = wrong_rank_max_index_2[i*2];
+            int false_index = wrong_rank_max_index_2[i*2+1];
+            
+            fix_wrong_index_max(true_index, false_index, 1);
         }
 
         apply_delta();

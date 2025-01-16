@@ -1,59 +1,49 @@
 CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o: \
  /global/homes/y/yuxiaoli/ExtreM_z/src/ExtreM.cpp \
- /usr/include/stdc-predef.h /usr/include/c++/7/iostream \
- /usr/include/c++/7/x86_64-suse-linux/bits/c++config.h \
+ /usr/include/stdc-predef.h /usr/include/c++/12/iostream \
+ /usr/include/c++/12/x86_64-suse-linux/bits/c++config.h \
  /usr/include/bits/wordsize.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/os_defines.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/os_defines.h \
  /usr/include/features.h /usr/include/sys/cdefs.h \
  /usr/include/bits/long-double.h /usr/include/gnu/stubs.h \
  /usr/include/gnu/stubs-64.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/cpu_defines.h \
- /usr/include/c++/7/ostream /usr/include/c++/7/ios \
- /usr/include/c++/7/iosfwd /usr/include/c++/7/bits/stringfwd.h \
- /usr/include/c++/7/bits/memoryfwd.h /usr/include/c++/7/bits/postypes.h \
- /usr/include/c++/7/cwchar /usr/include/wchar.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/cpu_defines.h \
+ /usr/include/c++/12/pstl/pstl_config.h /usr/include/c++/12/ostream \
+ /usr/include/c++/12/ios /usr/include/c++/12/iosfwd \
+ /usr/include/c++/12/bits/stringfwd.h \
+ /usr/include/c++/12/bits/memoryfwd.h /usr/include/c++/12/bits/postypes.h \
+ /usr/include/c++/12/cwchar /usr/include/wchar.h \
  /usr/include/bits/libc-header-start.h /usr/include/bits/floatn.h \
  /usr/include/bits/floatn-common.h \
- /usr/lib64/gcc/x86_64-suse-linux/7/include/stddef.h \
- /usr/lib64/gcc/x86_64-suse-linux/7/include/stdarg.h \
+ /usr/lib64/gcc/x86_64-suse-linux/12/include/stddef.h \
+ /usr/lib64/gcc/x86_64-suse-linux/12/include/stdarg.h \
  /usr/include/bits/wchar.h /usr/include/bits/types/wint_t.h \
  /usr/include/bits/types/mbstate_t.h \
  /usr/include/bits/types/__mbstate_t.h /usr/include/bits/types/__FILE.h \
  /usr/include/bits/types/FILE.h /usr/include/bits/types/locale_t.h \
- /usr/include/bits/types/__locale_t.h /usr/include/c++/7/exception \
- /usr/include/c++/7/bits/exception.h \
- /usr/include/c++/7/bits/exception_ptr.h \
- /usr/include/c++/7/bits/exception_defines.h \
- /usr/include/c++/7/bits/cxxabi_init_exception.h \
- /usr/include/c++/7/typeinfo /usr/include/c++/7/bits/hash_bytes.h \
- /usr/include/c++/7/new /usr/include/c++/7/bits/nested_exception.h \
- /usr/include/c++/7/bits/move.h /usr/include/c++/7/bits/concept_check.h \
- /usr/include/c++/7/type_traits /usr/include/c++/7/bits/char_traits.h \
- /usr/include/c++/7/bits/stl_algobase.h \
- /usr/include/c++/7/bits/functexcept.h \
- /usr/include/c++/7/bits/cpp_type_traits.h \
- /usr/include/c++/7/ext/type_traits.h \
- /usr/include/c++/7/ext/numeric_traits.h \
- /usr/include/c++/7/bits/stl_pair.h \
- /usr/include/c++/7/bits/stl_iterator_base_types.h \
- /usr/include/c++/7/bits/stl_iterator_base_funcs.h \
- /usr/include/c++/7/debug/assertions.h \
- /usr/include/c++/7/bits/stl_iterator.h \
- /usr/include/c++/7/bits/ptr_traits.h /usr/include/c++/7/debug/debug.h \
- /usr/include/c++/7/bits/predefined_ops.h /usr/include/c++/7/cstdint \
- /usr/lib64/gcc/x86_64-suse-linux/7/include/stdint.h \
+ /usr/include/bits/types/__locale_t.h /usr/include/c++/12/exception \
+ /usr/include/c++/12/bits/exception.h \
+ /usr/include/c++/12/bits/exception_ptr.h \
+ /usr/include/c++/12/bits/exception_defines.h \
+ /usr/include/c++/12/bits/cxxabi_init_exception.h \
+ /usr/include/c++/12/typeinfo /usr/include/c++/12/bits/hash_bytes.h \
+ /usr/include/c++/12/new /usr/include/c++/12/bits/move.h \
+ /usr/include/c++/12/type_traits \
+ /usr/include/c++/12/bits/nested_exception.h \
+ /usr/include/c++/12/bits/char_traits.h /usr/include/c++/12/cstdint \
+ /usr/lib64/gcc/x86_64-suse-linux/12/include/stdint.h \
  /usr/include/stdint.h /usr/include/bits/types.h \
  /usr/include/bits/timesize.h /usr/include/bits/typesizes.h \
  /usr/include/bits/time64.h /usr/include/bits/stdint-intn.h \
- /usr/include/bits/stdint-uintn.h /usr/include/c++/7/bits/localefwd.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/c++locale.h \
- /usr/include/c++/7/clocale /usr/include/locale.h \
- /usr/include/bits/locale.h /usr/include/c++/7/cctype \
+ /usr/include/bits/stdint-uintn.h /usr/include/c++/12/bits/localefwd.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/c++locale.h \
+ /usr/include/c++/12/clocale /usr/include/locale.h \
+ /usr/include/bits/locale.h /usr/include/c++/12/cctype \
  /usr/include/ctype.h /usr/include/bits/endian.h \
- /usr/include/bits/endianness.h /usr/include/c++/7/bits/ios_base.h \
- /usr/include/c++/7/ext/atomicity.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/gthr.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/gthr-default.h \
+ /usr/include/bits/endianness.h /usr/include/c++/12/bits/ios_base.h \
+ /usr/include/c++/12/ext/atomicity.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/gthr.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/gthr-default.h \
  /usr/include/pthread.h /usr/include/sched.h \
  /usr/include/bits/types/time_t.h \
  /usr/include/bits/types/struct_timespec.h /usr/include/bits/sched.h \
@@ -66,166 +56,187 @@ CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o: \
  /usr/include/bits/pthreadtypes.h /usr/include/bits/thread-shared-types.h \
  /usr/include/bits/pthreadtypes-arch.h /usr/include/bits/struct_mutex.h \
  /usr/include/bits/struct_rwlock.h /usr/include/bits/setjmp.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/atomic_word.h \
- /usr/include/c++/7/bits/locale_classes.h /usr/include/c++/7/string \
- /usr/include/c++/7/bits/allocator.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/c++allocator.h \
- /usr/include/c++/7/ext/new_allocator.h \
- /usr/include/c++/7/bits/ostream_insert.h \
- /usr/include/c++/7/bits/cxxabi_forced.h \
- /usr/include/c++/7/bits/stl_function.h \
- /usr/include/c++/7/backward/binders.h \
- /usr/include/c++/7/bits/range_access.h \
- /usr/include/c++/7/initializer_list \
- /usr/include/c++/7/bits/basic_string.h \
- /usr/include/c++/7/ext/alloc_traits.h \
- /usr/include/c++/7/bits/alloc_traits.h /usr/include/c++/7/string_view \
- /usr/include/c++/7/limits /usr/include/c++/7/bits/functional_hash.h \
- /usr/include/c++/7/bits/string_view.tcc \
- /usr/include/c++/7/ext/string_conversions.h /usr/include/c++/7/cstdlib \
+ /usr/include/c++/12/x86_64-suse-linux/bits/atomic_word.h \
+ /usr/include/c++/12/bits/locale_classes.h /usr/include/c++/12/string \
+ /usr/include/c++/12/bits/allocator.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/c++allocator.h \
+ /usr/include/c++/12/bits/new_allocator.h \
+ /usr/include/c++/12/bits/functexcept.h \
+ /usr/include/c++/12/bits/cpp_type_traits.h \
+ /usr/include/c++/12/bits/ostream_insert.h \
+ /usr/include/c++/12/bits/cxxabi_forced.h \
+ /usr/include/c++/12/bits/stl_iterator_base_types.h \
+ /usr/include/c++/12/bits/stl_iterator_base_funcs.h \
+ /usr/include/c++/12/bits/concept_check.h \
+ /usr/include/c++/12/debug/assertions.h \
+ /usr/include/c++/12/bits/stl_iterator.h \
+ /usr/include/c++/12/ext/type_traits.h \
+ /usr/include/c++/12/bits/ptr_traits.h \
+ /usr/include/c++/12/bits/stl_function.h \
+ /usr/include/c++/12/backward/binders.h \
+ /usr/include/c++/12/ext/numeric_traits.h \
+ /usr/include/c++/12/bits/stl_algobase.h \
+ /usr/include/c++/12/bits/stl_pair.h /usr/include/c++/12/bits/utility.h \
+ /usr/include/c++/12/debug/debug.h \
+ /usr/include/c++/12/bits/predefined_ops.h \
+ /usr/include/c++/12/bits/refwrap.h /usr/include/c++/12/bits/invoke.h \
+ /usr/include/c++/12/bits/range_access.h \
+ /usr/include/c++/12/initializer_list \
+ /usr/include/c++/12/bits/basic_string.h \
+ /usr/include/c++/12/ext/alloc_traits.h \
+ /usr/include/c++/12/bits/alloc_traits.h \
+ /usr/include/c++/12/bits/stl_construct.h /usr/include/c++/12/string_view \
+ /usr/include/c++/12/bits/functional_hash.h \
+ /usr/include/c++/12/bits/string_view.tcc \
+ /usr/include/c++/12/ext/string_conversions.h /usr/include/c++/12/cstdlib \
  /usr/include/stdlib.h /usr/include/bits/waitflags.h \
  /usr/include/bits/waitstatus.h /usr/include/sys/types.h \
  /usr/include/endian.h /usr/include/bits/byteswap.h \
  /usr/include/bits/uintn-identity.h /usr/include/sys/select.h \
  /usr/include/bits/select.h /usr/include/bits/types/sigset_t.h \
  /usr/include/bits/types/__sigset_t.h /usr/include/alloca.h \
- /usr/include/bits/stdlib-float.h /usr/include/c++/7/bits/std_abs.h \
- /usr/include/c++/7/cstdio /usr/include/stdio.h \
+ /usr/include/bits/stdlib-float.h /usr/include/c++/12/bits/std_abs.h \
+ /usr/include/c++/12/cstdio /usr/include/stdio.h \
  /usr/include/bits/types/__fpos_t.h /usr/include/bits/types/__fpos64_t.h \
  /usr/include/bits/types/struct_FILE.h \
  /usr/include/bits/types/cookie_io_functions_t.h \
  /usr/include/bits/stdio_lim.h /usr/include/bits/sys_errlist.h \
- /usr/include/c++/7/cerrno /usr/include/errno.h /usr/include/bits/errno.h \
- /usr/include/linux/errno.h /usr/include/asm/errno.h \
- /usr/include/asm-generic/errno.h /usr/include/asm-generic/errno-base.h \
- /usr/include/bits/types/error_t.h \
- /usr/include/c++/7/bits/basic_string.tcc \
- /usr/include/c++/7/bits/locale_classes.tcc \
- /usr/include/c++/7/system_error \
- /usr/include/c++/7/x86_64-suse-linux/bits/error_constants.h \
- /usr/include/c++/7/stdexcept /usr/include/c++/7/streambuf \
- /usr/include/c++/7/bits/streambuf.tcc \
- /usr/include/c++/7/bits/basic_ios.h \
- /usr/include/c++/7/bits/locale_facets.h /usr/include/c++/7/cwctype \
+ /usr/include/c++/12/cerrno /usr/include/errno.h \
+ /usr/include/bits/errno.h /usr/include/linux/errno.h \
+ /usr/include/asm/errno.h /usr/include/asm-generic/errno.h \
+ /usr/include/asm-generic/errno-base.h /usr/include/bits/types/error_t.h \
+ /usr/include/c++/12/bits/charconv.h \
+ /usr/include/c++/12/bits/basic_string.tcc \
+ /usr/include/c++/12/bits/locale_classes.tcc \
+ /usr/include/c++/12/system_error \
+ /usr/include/c++/12/x86_64-suse-linux/bits/error_constants.h \
+ /usr/include/c++/12/stdexcept /usr/include/c++/12/streambuf \
+ /usr/include/c++/12/bits/streambuf.tcc \
+ /usr/include/c++/12/bits/basic_ios.h \
+ /usr/include/c++/12/bits/locale_facets.h /usr/include/c++/12/cwctype \
  /usr/include/wctype.h /usr/include/bits/wctype-wchar.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/ctype_base.h \
- /usr/include/c++/7/bits/streambuf_iterator.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/ctype_inline.h \
- /usr/include/c++/7/bits/locale_facets.tcc \
- /usr/include/c++/7/bits/basic_ios.tcc \
- /usr/include/c++/7/bits/ostream.tcc /usr/include/c++/7/istream \
- /usr/include/c++/7/bits/istream.tcc /usr/include/c++/7/fstream \
- /usr/include/c++/7/bits/codecvt.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/basic_file.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/c++io.h \
- /usr/include/c++/7/bits/fstream.tcc /usr/include/c++/7/vector \
- /usr/include/c++/7/bits/stl_construct.h \
- /usr/include/c++/7/bits/stl_uninitialized.h /usr/include/c++/7/utility \
- /usr/include/c++/7/bits/stl_relops.h \
- /usr/include/c++/7/bits/stl_vector.h \
- /usr/include/c++/7/bits/stl_bvector.h /usr/include/c++/7/bits/vector.tcc \
+ /usr/include/c++/12/x86_64-suse-linux/bits/ctype_base.h \
+ /usr/include/c++/12/bits/streambuf_iterator.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/ctype_inline.h \
+ /usr/include/c++/12/bits/locale_facets.tcc \
+ /usr/include/c++/12/bits/basic_ios.tcc \
+ /usr/include/c++/12/bits/ostream.tcc /usr/include/c++/12/istream \
+ /usr/include/c++/12/bits/istream.tcc /usr/include/c++/12/fstream \
+ /usr/include/c++/12/bits/codecvt.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/basic_file.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/c++io.h \
+ /usr/include/c++/12/bits/fstream.tcc /usr/include/c++/12/vector \
+ /usr/include/c++/12/bits/stl_uninitialized.h \
+ /usr/include/c++/12/bits/stl_vector.h \
+ /usr/include/c++/12/bits/stl_bvector.h \
+ /usr/include/c++/12/bits/vector.tcc \
  /global/homes/y/yuxiaoli/ExtreM_z/src/../include/api/ExtreM.h \
- /usr/include/c++/7/array \
+ /usr/include/c++/12/array /usr/include/c++/12/compare \
  /global/homes/y/yuxiaoli/ExtreM_z/src/./UnionFind.h \
  /global/u2/y/yuxiaoli/include/SZ3/api/sz.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/api/impl/SZImpl.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/api/impl/SZDispatcher.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/api/impl/SZAlgoInterp.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/api/impl/SZAlgoLorenzoReg.hpp \
- /usr/include/c++/7/cmath /usr/include/math.h \
+ /usr/include/c++/12/cmath /usr/include/math.h \
  /usr/include/bits/math-vector.h /usr/include/bits/libm-simd-decl-stubs.h \
  /usr/include/bits/flt-eval-method.h /usr/include/bits/fp-logb.h \
  /usr/include/bits/fp-fast.h \
  /usr/include/bits/mathcalls-helper-functions.h \
  /usr/include/bits/mathcalls.h /usr/include/bits/mathcalls-narrow.h \
- /usr/include/bits/iscanonical.h /usr/include/c++/7/bits/specfun.h \
- /usr/include/c++/7/tr1/gamma.tcc \
- /usr/include/c++/7/tr1/special_function_util.h \
- /usr/include/c++/7/tr1/bessel_function.tcc \
- /usr/include/c++/7/tr1/special_function_util.h \
- /usr/include/c++/7/tr1/beta_function.tcc \
- /usr/include/c++/7/tr1/ell_integral.tcc \
- /usr/include/c++/7/tr1/exp_integral.tcc \
- /usr/include/c++/7/tr1/hypergeometric.tcc \
- /usr/include/c++/7/tr1/legendre_function.tcc \
- /usr/include/c++/7/tr1/modified_bessel_func.tcc \
- /usr/include/c++/7/tr1/poly_hermite.tcc \
- /usr/include/c++/7/tr1/poly_laguerre.tcc \
- /usr/include/c++/7/tr1/riemann_zeta.tcc /usr/include/c++/7/memory \
- /usr/include/c++/7/bits/stl_tempbuf.h \
- /usr/include/c++/7/bits/stl_raw_storage_iter.h \
- /usr/include/c++/7/ext/concurrence.h \
- /usr/include/c++/7/bits/uses_allocator.h \
- /usr/include/c++/7/bits/unique_ptr.h /usr/include/c++/7/tuple \
- /usr/include/c++/7/bits/invoke.h /usr/include/c++/7/bits/shared_ptr.h \
- /usr/include/c++/7/bits/shared_ptr_base.h \
- /usr/include/c++/7/bits/allocated_ptr.h \
- /usr/include/c++/7/bits/refwrap.h \
- /usr/include/c++/7/ext/aligned_buffer.h \
- /usr/include/c++/7/bits/shared_ptr_atomic.h \
- /usr/include/c++/7/bits/atomic_base.h \
- /usr/include/c++/7/bits/atomic_lockfree_defines.h \
- /usr/include/c++/7/backward/auto_ptr.h \
+ /usr/include/bits/iscanonical.h /usr/include/c++/12/bits/specfun.h \
+ /usr/include/c++/12/limits /usr/include/c++/12/tr1/gamma.tcc \
+ /usr/include/c++/12/tr1/special_function_util.h \
+ /usr/include/c++/12/tr1/bessel_function.tcc \
+ /usr/include/c++/12/tr1/beta_function.tcc \
+ /usr/include/c++/12/tr1/ell_integral.tcc \
+ /usr/include/c++/12/tr1/exp_integral.tcc \
+ /usr/include/c++/12/tr1/hypergeometric.tcc \
+ /usr/include/c++/12/tr1/legendre_function.tcc \
+ /usr/include/c++/12/tr1/modified_bessel_func.tcc \
+ /usr/include/c++/12/tr1/poly_hermite.tcc \
+ /usr/include/c++/12/tr1/poly_laguerre.tcc \
+ /usr/include/c++/12/tr1/riemann_zeta.tcc /usr/include/c++/12/memory \
+ /usr/include/c++/12/bits/stl_tempbuf.h \
+ /usr/include/c++/12/bits/stl_raw_storage_iter.h \
+ /usr/include/c++/12/bits/align.h /usr/include/c++/12/bit \
+ /usr/include/c++/12/bits/uses_allocator.h \
+ /usr/include/c++/12/bits/unique_ptr.h /usr/include/c++/12/tuple \
+ /usr/include/c++/12/bits/shared_ptr.h \
+ /usr/include/c++/12/bits/shared_ptr_base.h \
+ /usr/include/c++/12/bits/allocated_ptr.h \
+ /usr/include/c++/12/ext/aligned_buffer.h \
+ /usr/include/c++/12/ext/concurrence.h \
+ /usr/include/c++/12/bits/shared_ptr_atomic.h \
+ /usr/include/c++/12/bits/atomic_base.h \
+ /usr/include/c++/12/bits/atomic_lockfree_defines.h \
+ /usr/include/c++/12/backward/auto_ptr.h \
+ /usr/include/c++/12/pstl/glue_memory_defs.h \
+ /usr/include/c++/12/pstl/execution_defs.h \
  /global/u2/y/yuxiaoli/include/SZ3/compressor/SZGenericCompressor.hpp \
- /usr/include/c++/7/cstring /usr/include/string.h /usr/include/strings.h \
+ /usr/include/c++/12/cstring /usr/include/string.h /usr/include/strings.h \
  /global/u2/y/yuxiaoli/include/SZ3/compressor/Compressor.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/def.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/utils/Config.hpp \
- /usr/include/c++/7/numeric /usr/include/c++/7/bits/stl_numeric.h \
+ /usr/include/c++/12/numeric /usr/include/c++/12/bits/stl_numeric.h \
+ /usr/include/c++/12/pstl/glue_numeric_defs.h \
  /global/u2/y/yuxiaoli/include/SZ3/utils/ByteUtil.hpp \
- /usr/include/c++/7/algorithm /usr/include/c++/7/bits/stl_algo.h \
- /usr/include/c++/7/bits/algorithmfwd.h \
- /usr/include/c++/7/bits/stl_heap.h \
- /usr/include/c++/7/bits/uniform_int_dist.h \
+ /usr/include/c++/12/algorithm /usr/include/c++/12/bits/stl_algo.h \
+ /usr/include/c++/12/bits/algorithmfwd.h \
+ /usr/include/c++/12/bits/stl_heap.h \
+ /usr/include/c++/12/bits/uniform_int_dist.h \
+ /usr/include/c++/12/pstl/glue_algorithm_defs.h \
  /global/u2/y/yuxiaoli/include/SZ3/utils/MemoryUtil.hpp \
- /usr/include/c++/7/cassert /usr/include/assert.h \
+ /usr/include/c++/12/cassert /usr/include/assert.h \
  /global/u2/y/yuxiaoli/include/SZ3/utils/inih/INIReader.h \
- /usr/include/c++/7/map /usr/include/c++/7/bits/stl_tree.h \
- /usr/include/c++/7/bits/node_handle.h /usr/include/c++/7/optional \
- /usr/include/c++/7/bits/enable_special_members.h \
- /usr/include/c++/7/bits/stl_map.h /usr/include/c++/7/bits/stl_multimap.h \
- /usr/include/c++/7/set /usr/include/c++/7/bits/stl_set.h \
- /usr/include/c++/7/bits/stl_multiset.h \
- /global/u2/y/yuxiaoli/include/SZ3/version.hpp /usr/include/c++/7/sstream \
- /usr/include/c++/7/bits/sstream.tcc \
+ /usr/include/c++/12/map /usr/include/c++/12/bits/stl_tree.h \
+ /usr/include/c++/12/bits/node_handle.h \
+ /usr/include/c++/12/bits/stl_map.h \
+ /usr/include/c++/12/bits/stl_multimap.h \
+ /usr/include/c++/12/bits/erase_if.h /usr/include/c++/12/set \
+ /usr/include/c++/12/bits/stl_set.h \
+ /usr/include/c++/12/bits/stl_multiset.h \
+ /global/u2/y/yuxiaoli/include/SZ3/version.hpp \
+ /usr/include/c++/12/sstream /usr/include/c++/12/bits/sstream.tcc \
  /global/u2/y/yuxiaoli/include/SZ3/decomposition/Decomposition.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/encoder/Encoder.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/lossless/Lossless.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/utils/FileUtil.hpp \
- /usr/include/c++/7/iomanip /usr/include/c++/7/locale \
- /usr/include/c++/7/bits/locale_facets_nonio.h /usr/include/c++/7/ctime \
- /usr/include/c++/7/x86_64-suse-linux/bits/time_members.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/messages_members.h \
- /usr/include/libintl.h /usr/include/c++/7/bits/locale_facets_nonio.tcc \
- /usr/include/c++/7/bits/locale_conv.h \
- /usr/include/c++/7/bits/stringfwd.h /usr/include/c++/7/bits/allocator.h \
- /usr/include/c++/7/bits/codecvt.h /usr/include/c++/7/bits/unique_ptr.h \
- /usr/include/c++/7/bits/quoted_string.h /usr/include/c++/7/random \
- /usr/include/c++/7/bits/random.h \
- /usr/include/c++/7/x86_64-suse-linux/bits/opt_random.h \
- /usr/include/c++/7/bits/random.tcc \
+ /usr/include/c++/12/iomanip /usr/include/c++/12/locale \
+ /usr/include/c++/12/bits/locale_facets_nonio.h /usr/include/c++/12/ctime \
+ /usr/include/c++/12/x86_64-suse-linux/bits/time_members.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/messages_members.h \
+ /usr/include/libintl.h /usr/include/c++/12/bits/locale_facets_nonio.tcc \
+ /usr/include/c++/12/bits/locale_conv.h \
+ /usr/include/c++/12/bits/quoted_string.h /usr/include/c++/12/random \
+ /usr/include/c++/12/bits/random.h \
+ /usr/include/c++/12/x86_64-suse-linux/bits/opt_random.h \
+ /usr/include/c++/12/bits/random.tcc \
  /global/u2/y/yuxiaoli/include/SZ3/utils/Timer.hpp \
- /usr/include/c++/7/chrono /usr/include/c++/7/ratio \
- /usr/include/c++/7/bits/parse_numbers.h \
+ /usr/include/c++/12/chrono /usr/include/c++/12/bits/chrono.h \
+ /usr/include/c++/12/ratio /usr/include/c++/12/bits/parse_numbers.h \
  /global/u2/y/yuxiaoli/include/SZ3/compressor/SZIterateCompressor.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/predictor/LorenzoPredictor.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/predictor/Predictor.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/utils/Iterator.hpp \
- /usr/include/c++/7/cstddef /usr/include/c++/7/iterator \
- /usr/include/c++/7/bits/stream_iterator.h \
+ /usr/include/c++/12/cstddef /usr/include/c++/12/iterator \
+ /usr/include/c++/12/bits/stream_iterator.h \
  /global/u2/y/yuxiaoli/include/SZ3/quantizer/Quantizer.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/decomposition/LorenzoRegressionDecomposition.hpp \
- /usr/include/c++/7/list /usr/include/c++/7/bits/stl_list.h \
- /usr/include/c++/7/bits/list.tcc \
+ /usr/include/c++/12/list /usr/include/c++/12/bits/stl_list.h \
+ /usr/include/c++/12/bits/list.tcc \
  /global/u2/y/yuxiaoli/include/SZ3/decomposition/Decomposition.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/encoder/HuffmanEncoder.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/utils/ska_hash/unordered_map.hpp \
+ /usr/include/c++/12/utility /usr/include/c++/12/bits/stl_relops.h \
  /global/u2/y/yuxiaoli/include/SZ3/utils/ska_hash/flat_hash_map.hpp \
- /usr/include/c++/7/functional /usr/include/c++/7/bits/std_function.h \
- /usr/include/c++/7/unordered_map /usr/include/c++/7/bits/hashtable.h \
- /usr/include/c++/7/bits/hashtable_policy.h \
- /usr/include/c++/7/bits/unordered_map.h /usr/include/c++/7/unordered_set \
- /usr/include/c++/7/bits/unordered_set.h \
+ /usr/include/c++/12/functional /usr/include/c++/12/bits/std_function.h \
+ /usr/include/c++/12/unordered_map /usr/include/c++/12/bits/hashtable.h \
+ /usr/include/c++/12/bits/hashtable_policy.h \
+ /usr/include/c++/12/bits/enable_special_members.h \
+ /usr/include/c++/12/bits/unordered_map.h \
+ /usr/include/c++/12/unordered_set \
+ /usr/include/c++/12/bits/unordered_set.h \
  /global/u2/y/yuxiaoli/include/SZ3/predictor/MetaLorenzoPredictor.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/utils/MetaDef.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/predictor/MetaRegressionPredictor.hpp \
@@ -247,49 +258,49 @@ CMakeFiles/ExtreMz.dir/src/ExtreM.cpp.o: \
  /global/u2/y/yuxiaoli/include/SZ3/api/impl/SZAlgoNopred.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/decomposition/NoPredictionDecomposition.hpp \
  /global/u2/y/yuxiaoli/include/SZ3/api/impl/SZImplOMP.hpp \
- /usr/include/c++/7/parallel/algorithm \
- /usr/include/c++/7/parallel/algorithmfwd.h \
- /usr/include/c++/7/parallel/tags.h \
- /usr/lib64/gcc/x86_64-suse-linux/7/include/omp.h \
- /usr/include/c++/7/parallel/types.h /usr/include/c++/7/tr1/cstdint \
- /usr/include/c++/7/parallel/settings.h \
- /usr/include/c++/7/parallel/algobase.h \
- /usr/include/c++/7/parallel/base.h \
- /usr/include/c++/7/parallel/features.h \
- /usr/include/c++/7/parallel/basic_iterator.h \
- /usr/include/c++/7/parallel/parallel.h \
- /usr/include/c++/7/parallel/compiletime_settings.h \
- /usr/include/c++/7/parallel/find.h \
- /usr/include/c++/7/parallel/compatibility.h \
- /usr/include/c++/7/parallel/equally_split.h \
- /usr/include/c++/7/parallel/find_selectors.h \
- /usr/include/c++/7/parallel/algo.h \
- /usr/include/c++/7/parallel/iterator.h \
- /usr/include/c++/7/parallel/sort.h \
- /usr/include/c++/7/parallel/multiway_mergesort.h \
- /usr/include/c++/7/parallel/multiway_merge.h \
- /usr/include/c++/7/parallel/losertree.h \
- /usr/include/c++/7/parallel/multiseq_selection.h \
- /usr/include/c++/7/queue /usr/include/c++/7/deque \
- /usr/include/c++/7/bits/stl_deque.h /usr/include/c++/7/bits/deque.tcc \
- /usr/include/c++/7/bits/stl_queue.h \
- /usr/include/c++/7/parallel/quicksort.h \
- /usr/include/c++/7/parallel/partition.h \
- /usr/include/c++/7/parallel/random_number.h \
- /usr/include/c++/7/tr1/random /usr/include/c++/7/tr1/type_traits \
- /usr/include/c++/7/tr1/cmath /usr/include/c++/7/tr1/random.h \
- /usr/include/c++/7/tr1/random.tcc \
- /usr/include/c++/7/parallel/balanced_quicksort.h \
- /usr/include/c++/7/parallel/queue.h \
- /usr/include/c++/7/parallel/workstealing.h \
- /usr/include/c++/7/parallel/par_loop.h \
- /usr/include/c++/7/parallel/omp_loop.h \
- /usr/include/c++/7/parallel/omp_loop_static.h \
- /usr/include/c++/7/parallel/for_each_selectors.h \
- /usr/include/c++/7/parallel/for_each.h \
- /usr/include/c++/7/parallel/search.h \
- /usr/include/c++/7/parallel/random_shuffle.h \
- /usr/include/c++/7/parallel/merge.h \
- /usr/include/c++/7/parallel/unique_copy.h \
- /usr/include/c++/7/parallel/set_operations.h /usr/include/c++/7/cfloat \
- /usr/lib64/gcc/x86_64-suse-linux/7/include/float.h
+ /usr/lib64/gcc/x86_64-suse-linux/12/include/omp.h \
+ /usr/include/c++/12/parallel/algorithm \
+ /usr/include/c++/12/parallel/algorithmfwd.h \
+ /usr/include/c++/12/parallel/tags.h /usr/include/c++/12/parallel/types.h \
+ /usr/include/c++/12/tr1/cstdint /usr/include/c++/12/parallel/settings.h \
+ /usr/include/c++/12/parallel/algobase.h \
+ /usr/include/c++/12/parallel/base.h \
+ /usr/include/c++/12/parallel/features.h \
+ /usr/include/c++/12/parallel/basic_iterator.h \
+ /usr/include/c++/12/parallel/parallel.h \
+ /usr/include/c++/12/parallel/compiletime_settings.h \
+ /usr/include/c++/12/parallel/find.h \
+ /usr/include/c++/12/parallel/compatibility.h \
+ /usr/include/c++/12/parallel/equally_split.h \
+ /usr/include/c++/12/parallel/find_selectors.h \
+ /usr/include/c++/12/parallel/algo.h \
+ /usr/include/c++/12/parallel/iterator.h \
+ /usr/include/c++/12/parallel/sort.h \
+ /usr/include/c++/12/parallel/multiway_mergesort.h \
+ /usr/include/c++/12/parallel/multiway_merge.h \
+ /usr/include/c++/12/parallel/losertree.h \
+ /usr/include/c++/12/parallel/multiseq_selection.h \
+ /usr/include/c++/12/queue /usr/include/c++/12/deque \
+ /usr/include/c++/12/bits/stl_deque.h /usr/include/c++/12/bits/deque.tcc \
+ /usr/include/c++/12/bits/stl_queue.h \
+ /usr/include/c++/12/parallel/quicksort.h \
+ /usr/include/c++/12/parallel/partition.h \
+ /usr/include/c++/12/parallel/random_number.h \
+ /usr/include/c++/12/tr1/random /usr/include/c++/12/tr1/type_traits \
+ /usr/include/c++/12/tr1/cmath /usr/include/c++/12/tr1/random.h \
+ /usr/include/c++/12/tr1/random.tcc \
+ /usr/include/c++/12/parallel/balanced_quicksort.h \
+ /usr/include/c++/12/parallel/queue.h \
+ /usr/include/c++/12/parallel/workstealing.h \
+ /usr/include/c++/12/parallel/par_loop.h \
+ /usr/include/c++/12/parallel/omp_loop.h \
+ /usr/include/c++/12/parallel/omp_loop_static.h \
+ /usr/include/c++/12/parallel/for_each_selectors.h \
+ /usr/include/c++/12/parallel/for_each.h \
+ /usr/include/c++/12/parallel/search.h \
+ /usr/include/c++/12/parallel/random_shuffle.h \
+ /usr/include/c++/12/parallel/merge.h \
+ /usr/include/c++/12/parallel/unique_copy.h \
+ /usr/include/c++/12/parallel/set_operations.h /usr/include/c++/12/cfloat \
+ /usr/lib64/gcc/x86_64-suse-linux/12/include/float.h \
+ /usr/include/c++/12/atomic

@@ -9,20 +9,22 @@
 struct Branch {
     std::vector<std::pair<int, int>> vertices; // order, globalId, first pair is the maximum
     Branch *parentBranch = nullptr;
+
+    void print() const;
 };
 
 extern "C"{
     extern int directions[78], direction_to_index_mapping[26][3]; 
     extern double* d_deltaBuffer;
     extern int width, height, depth, maxNeighbors, num_Elements, count_f_max, count_f_min, count_f_saddle, number_of_false_cases;
-    extern int wrong_max_counter, globalMin, dec_globalMin;
+    extern int wrong_max_counter, globalMin, dec_globalMin, wrong_max_counter_2;
     extern int* adjacency, *dec_vertex_type, *vertex_type, *all_max, *all_min, *all_saddle;
-    extern double *decp_data, *input_data;
+    extern double *decp_data, *input_data, *decp_data_copy;
     extern double bound;
-    extern int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index;
+    extern int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index, *wrong_rank_max_2, *wrong_rank_max_index_2;
     extern std::vector<std::array<int, 46>> saddleTriplets, dec_saddleTriplets;
     extern std::vector<std::vector<int>> vertex_cells;
-    extern std::vector<int> saddles2, maximum, dec_saddles2, dec_maximum;
+    extern std::vector<int> saddles2, maximum, dec_saddles2, dec_maximum, delta_counter;
     extern int *lowerStars, *upperStars, *dec_lowerStars, *dec_upperStars;
 
 
