@@ -41,7 +41,7 @@ extern "C" {
     int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index;
     std::vector<std::array<int, 46>> saddleTriplets, dec_saddleTriplets;
     std::vector<int> saddles2, maximum, dec_saddles2, dec_maximum;
-
+    int *lowerStars, *upperStars, *dec_lowerStars, *dec_upperStars;
     int direction_to_index_mapping[26][3] = 
     {
         {1, 0, 0}, {-1, 0, 0},   
@@ -72,7 +72,6 @@ extern "C" {
 
         std::streamsize size = file.tellg();
         file.seekg(0, std::ios::beg);
-        std::cout<<data_size<<std::endl;
         if (size != static_cast<std::streamsize>(data_size * sizeof(double))) {
             std::cerr << "File size does not match expected data size." << std::endl;
             return;
@@ -84,24 +83,21 @@ extern "C" {
             return;
         }
 
-        // Step 2: 配置 SZ3 压缩
-        SZ3::Config conf(data_size); // 1D 数据，长度为 data_size
+       
+        SZ3::Config conf(data_size); 
         conf.cmprAlgo = SZ3::ALGO_INTERP_LORENZO;
         conf.errorBoundMode = SZ3::EB_REL;
-        conf.relErrorBound = er; // 设置绝对误差界限
+        conf.relErrorBound = er; 
 
-        // Step 3: 压缩数据
+        
         size_t cmpSize = 0;
         char *compressedData = SZ_compress(conf, input_data, cmpSize);
 
-        // // Step 4: 解压缩数据
-        
-        
         SZ_decompress(conf, compressedData, cmpSize, decp_data);
-        // // Step 5: 释放压缩数据的内存
+        
         delete[] compressedData;
 
-        // 计算误差界限（bound）
+        
         double minValue = *std::min_element(input_data, input_data + data_size);
         double maxValue = *std::max_element(input_data, input_data + data_size);
         bound = (maxValue - minValue) * er;
@@ -205,11 +201,11 @@ extern "C" {
     }
     
     bool isless(const int v, const int u, const double* offset){
-        return offset[v] < offset[u] || (offset[v] == offset[u] && v < u);
+        return offset[v] < offset[u] || (std::abs(offset[v] - offset[u]) == 0 && v < u);
     }
 
     bool islarger(const int v, const int u, const double *offset){
-        return offset[v] > offset[u] || (offset[v] == offset[u] && v > u);
+        return offset[v] > offset[u] || (std::abs(offset[v] - offset[u]) == 0 && v > u);
     }
 
     void sortAndRemoveDuplicates(std::array<int, 46> &triplet) {
@@ -269,7 +265,8 @@ extern "C" {
         return;
         
     }
-    int classifyVertex1(const double* heightMap, int i, int type=0) {
+
+    int classifyVertex1(const double* heightMap, int i, int *lowerStars, int *upperStars, int type=0) {
     
         std::vector<std::vector<int>> *upperComponents = nullptr;
         std::vector<std::vector<int>> *lowerComponents = nullptr;
@@ -277,7 +274,6 @@ extern "C" {
         std::vector<std::vector<int>> localUpperComponents;
         std::vector<std::vector<int>> localLowerComponents;
         if(upperComponents == nullptr) {
-            
             upperComponents = &localUpperComponents;
         }
         if(lowerComponents == nullptr) {
@@ -289,29 +285,36 @@ extern "C" {
         int y = (i / (width)) % height; // Get the x coordinate
         int x = i % width; // Get the y coordinate
         int z = (i / (width * height)) % depth;
-    
+        
+        lowerStars[vertexId * (maxNeighbors+1) + maxNeighbors] = 0;
+        upperStars[vertexId * (maxNeighbors+1) + maxNeighbors] = 0;
         for (int d =0;d<maxNeighbors;d++) {
             if(adjacency[vertexId*maxNeighbors+d]==-1) continue;
             int r = adjacency[i*maxNeighbors+d];
             
             if (heightMap[r] < currentHeight) {
+                lowerStars[vertexId * (maxNeighbors+1) + lowerStars[vertexId * (maxNeighbors+1) + maxNeighbors]] = r;
+                lowerStars[vertexId * (maxNeighbors+1) + maxNeighbors]++;
                 lowerStar.emplace_back(r);
             } 
             else if (heightMap[r] == currentHeight and r<i) {
+                lowerStars[vertexId * (maxNeighbors+1) + lowerStars[vertexId * (maxNeighbors+1) + maxNeighbors]] = r;
+                lowerStars[vertexId * (maxNeighbors+1) + maxNeighbors]++;
                 lowerStar.emplace_back(r);
             }
 
             if (heightMap[r] > currentHeight) {
+                upperStars[vertexId * (maxNeighbors+1) + upperStars[vertexId * (maxNeighbors+1) + maxNeighbors]] = r;
+                upperStars[vertexId * (maxNeighbors+1) + maxNeighbors]++;
                 upperStar.emplace_back(r);
             } 
             else if (heightMap[r] == currentHeight and r>i) {
+                upperStars[vertexId * (maxNeighbors+1) + upperStars[vertexId * (maxNeighbors+1) + maxNeighbors]] = r;
+                upperStars[vertexId * (maxNeighbors+1) + maxNeighbors]++;
                 upperStar.emplace_back(r);
             }
-
         }
         
-        
-
         std::vector<UnionFind> lowerSeeds(lowerStar.size());
         std::vector<UnionFind> upperSeeds(upperStar.size());
         std::vector<UnionFind *> lowerList(lowerStar.size());
@@ -437,7 +440,7 @@ extern "C" {
             
         int lowerComponentNumber = lowerComponents->size();
         int upperComponentNumber = upperComponents->size();
-            // cout<<"yes"<<endl;
+
         // minimum: 0 1-saddle: 1, 2-saddle: 2, regular: 5 maximum: 4;
         if(lowerComponentNumber == 0 && upperComponentNumber == 1) return 0;
         else if(lowerComponentNumber == 1 && upperComponentNumber == 0) return 4;
@@ -450,10 +453,11 @@ extern "C" {
     }
 
     void classifyAllVertices(int *vertex_type_tmp, const double* heightMap, 
+                             int *lowerStars, int *upperStars,
                              int type=0) {
         #pragma omp parallel for
         for (int i = 0; i < num_Elements; ++i) {
-            vertex_type_tmp[i] = classifyVertex1(heightMap, i, type);
+            vertex_type_tmp[i] = classifyVertex1(heightMap, i, lowerStars, upperStars, type);
         }
     }
 
@@ -461,7 +465,7 @@ extern "C" {
         #pragma omp parallel for
         for(int tid = 0; tid < num_Elements; tid++)
         {
-            d_deltaBuffer[tid] = -2000.0 * bound;
+            d_deltaBuffer[tid] = -4.0 * bound;
         }    
     }
 
@@ -651,47 +655,51 @@ extern "C" {
             }
 
             else if(type1==2 and vertex_type[i]==2 || type1==1 and vertex_type[i]==1){
-                    std::vector<int> lowerStar, upperStar, or_lowerStar, or_upperStar;
+                    // std::vector<int> lowerStar, upperStar, or_lowerStar, or_upperStar;
                     double currentHeight = decp_data[i];
                     double or_currentHeight = input_data[i];
-                    for (int d =0;d<maxNeighbors;d++) {
-                        if(adjacency[i*maxNeighbors+d]==-1) continue;
-                        int r = adjacency[i*maxNeighbors+d];
+                    std::vector<int> lowerStar(dec_lowerStars + (maxNeighbors+1) * i, dec_lowerStars + (maxNeighbors+1) * i + dec_lowerStars[i * (maxNeighbors + 1) + maxNeighbors]);
+                    std::vector<int> upperStar(dec_upperStars + (maxNeighbors+1) * i, dec_upperStars + (maxNeighbors+1) * i + dec_upperStars[i * (maxNeighbors + 1) + maxNeighbors]);
+                    std::vector<int> or_lowerStar(lowerStars + (maxNeighbors+1) * i, lowerStars + (maxNeighbors+1) * i + lowerStars[i * (maxNeighbors + 1) + maxNeighbors]);
+                    std::vector<int> or_upperStar(upperStars + (maxNeighbors+1) * i, upperStars + (maxNeighbors+1) * i + upperStars[i * (maxNeighbors + 1) + maxNeighbors]);
+                    // for (int d =0;d<maxNeighbors;d++) {
+                    //     if(adjacency[i*maxNeighbors+d]==-1) continue;
+
+                    //     int r = adjacency[i*maxNeighbors+d];
                         
                         
-                        if (decp_data[r] < currentHeight) {
-                            lowerStar.emplace_back(r);
-                        } 
-                        else if (decp_data[r] == currentHeight and r<i) {
-                            lowerStar.emplace_back(r);
-                        }
+                    //     if (decp_data[r] < currentHeight) {
+                    //         lowerStar.emplace_back(r);
+                    //     } 
+                    //     else if (decp_data[r] == currentHeight and r<i) {
+                    //         lowerStar.emplace_back(r);
+                    //     }
 
-                        if (decp_data[r] > currentHeight) {
-                            upperStar.emplace_back(r);
-                        } else if (decp_data[r] == currentHeight and r>i) {
-                            upperStar.emplace_back(r);
-                        }
+                    //     if (decp_data[r] > currentHeight) {
+                    //         upperStar.emplace_back(r);
+                    //     } else if (decp_data[r] == currentHeight and r>i) {
+                    //         upperStar.emplace_back(r);
+                    //     }
 
-                        if (input_data[r] < or_currentHeight) {
-                            or_lowerStar.emplace_back(r);
-                        } 
-                        else if (input_data[r] == or_currentHeight and r<i) {
-                            or_lowerStar.emplace_back(r);
-                        }
+                    //     if (input_data[r] < or_currentHeight) {
+                    //         or_lowerStar.emplace_back(r);
+                    //     } 
+                    //     else if (input_data[r] == or_currentHeight and r<i) {
+                    //         or_lowerStar.emplace_back(r);
+                    //     }
 
-                        if (input_data[r] > or_currentHeight) {
-                            or_upperStar.emplace_back(r);
-                        } else if (input_data[r] == or_currentHeight and r>i) {
-                            or_upperStar.emplace_back(r);
-                        }
+                    //     if (input_data[r] > or_currentHeight) {
+                    //         or_upperStar.emplace_back(r);
+                    //     } else if (input_data[r] == or_currentHeight and r>i) {
+                    //         or_upperStar.emplace_back(r);
+                    //     }
 
-                    }
+                    // }
                 
-                if(areVectorsDifferent(lowerStar, or_lowerStar) or areVectorsDifferent(upperStar, or_upperStar)){
-                    all_saddle[count_f_saddle] = i;
-                    count_f_saddle+=1;
-                    
-                }
+                    if(areVectorsDifferent(lowerStar, or_lowerStar) or areVectorsDifferent(upperStar, or_upperStar)){
+                        all_saddle[count_f_saddle] = i;
+                        count_f_saddle+=1;
+                    }
             }
             
             
@@ -760,12 +768,6 @@ extern "C" {
         std::set<int> set2(vec2.begin(), vec2.end());
         std::vector<int> differences;
 
-        
-        for (const auto& elem : set1) {
-            if (set2.find(elem) == set2.end()) {
-                differences.push_back(elem);
-            }
-        }
 
         
         for (const auto& elem : set2) {
@@ -791,175 +793,107 @@ extern "C" {
     }
 
     void get_false_stars(int index){
-        std::vector<int > lowerStar, upperStar;
+        // std::vector<int > lowerStar, upperStar;
         double delta;
-        double currentHeight = decp_data[index];
-        for (int d =0;d<maxNeighbors;d++) {
+        std::vector<int> lowerStar(dec_lowerStars + (maxNeighbors+1) * index, dec_lowerStars + (maxNeighbors+1) * index + dec_lowerStars[index * (maxNeighbors + 1) + maxNeighbors]);
+        std::vector<int> upperStar(dec_upperStars + (maxNeighbors+1) * index, dec_upperStars + (maxNeighbors+1) * index + dec_upperStars[index * (maxNeighbors + 1) + maxNeighbors]);
+        std::vector<int> o_lowerStar(lowerStars + (maxNeighbors+1) * index, lowerStars + (maxNeighbors+1) * index + lowerStars[index * (maxNeighbors + 1) + maxNeighbors]);
+        std::vector<int> o_upperStar(upperStars + (maxNeighbors+1) * index, upperStars + (maxNeighbors+1) * index + upperStars[index * (maxNeighbors + 1) + maxNeighbors]);
+        // double currentHeight = decp_data[index];
+        // for (int d =0;d<maxNeighbors;d++) {
             
             
-            if(adjacency[index*maxNeighbors+d]==-1) continue;
-            int r = adjacency[index*maxNeighbors+d];
-            
-            
-                if (decp_data[r] < currentHeight) {
-                    lowerStar.emplace_back(r);
-                } 
-                else if (decp_data[r] == currentHeight and r<index) {
-                    lowerStar.emplace_back(r);
-                }
+        //     if(adjacency[index*maxNeighbors+d]==-1) continue;
+        //     int r = adjacency[index*maxNeighbors+d];
+        //         if (decp_data[r] < currentHeight) {
+        //             lowerStar.emplace_back(r);
+        //         } 
+        //         else if (decp_data[r] == currentHeight and r<index) {
+        //             lowerStar.emplace_back(r);
+        //         }
 
-                if (decp_data[r] > currentHeight) {
-                    upperStar.emplace_back(r);
-                } 
-                else if (decp_data[r] == currentHeight and r>index) {
-                    upperStar.emplace_back(r);
-                }
+        //         if (decp_data[r] > currentHeight) {
+        //             upperStar.emplace_back(r);
+        //         } 
+        //         else if (decp_data[r] == currentHeight and r>index) {
+        //             upperStar.emplace_back(r);
+        //         }
 
-        }
-
-        std::vector<std::vector<int> > lowerWedges = findWedges(lowerStar);
-        std::vector<std::vector<int> > upperWedges = findWedges(upperStar);
-
+        // }
         
 
-        std::vector<int > o_lowerStar, o_upperStar;
-        currentHeight = input_data[index];
-        for (int d =0;d<maxNeighbors;d++) {
+        // std::vector<int > o_lowerStar, o_upperStar;
+        // currentHeight = input_data[index];
+        // for (int d =0;d<maxNeighbors;d++) {
             
             
-            if(adjacency[index*maxNeighbors+d]==-1) continue;
-            int r = adjacency[index*maxNeighbors+d];
+        //     if(adjacency[index*maxNeighbors+d]==-1) continue;
+        //     int r = adjacency[index*maxNeighbors+d];
 
-                if (input_data[r] < currentHeight) {
-                    o_lowerStar.emplace_back(r);
-                } 
-                else if (input_data[r] == currentHeight and r<index) {
-                    o_lowerStar.emplace_back(r);
-                }
+        //         if (input_data[r] < currentHeight) {
+        //             o_lowerStar.emplace_back(r);
+        //         } 
+        //         else if (input_data[r] == currentHeight and r<index) {
+        //             o_lowerStar.emplace_back(r);
+        //         }
 
-                if (input_data[r] > currentHeight) {
-                    o_upperStar.emplace_back(r);
-                } 
-                else if (input_data[r] == currentHeight and r>index) {
-                    o_upperStar.emplace_back(r);
-                }
+        //         if (input_data[r] > currentHeight) {
+        //             o_upperStar.emplace_back(r);
+        //         } 
+        //         else if (input_data[r] == currentHeight and r>index) {
+        //             o_upperStar.emplace_back(r);
+        //         }
 
-        }
-        std::vector<std::vector<int> > o_lowerWedges = findWedges(o_lowerStar);
-        std::vector<std::vector<int> > o_upperWedges = findWedges(o_upperStar);
+        // }
         
-        if(lowerWedges.size()!=o_lowerWedges.size() or areVectorsDifferent(lowerStar, o_lowerStar)){
+        if(areVectorsDifferent(lowerStar, o_lowerStar)){
             std::vector<int> diff = findDifferences(lowerStar,o_lowerStar);
         
-            if(lowerStar.size()<=o_lowerStar.size() || lowerWedges.size()<=o_lowerWedges.size()){
+            // if(lowerStar.size()<=o_lowerStar.size() || lowerWedges.size()<=o_lowerWedges.size()){
                 // decrease value of the negative lower star.
-                if(lowerStar.size()==o_lowerStar.size()){
-                    diff = findDifference(o_lowerStar, lowerStar);
-                }
-                for(int i:diff){
+                
+            for(int i:diff){
+                delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
+                double oldValue = d_deltaBuffer[i];
+                if (delta > oldValue) {
+                    swap(i, delta);
+                }  
+
+            }
+
+            diff = findDifferences(o_lowerStar, lowerStar);
+            if(diff.size() > 0){
+                delta = (input_data[index]-bound+decp_data[index])/2 - decp_data[index];
+                double oldValue = d_deltaBuffer[index];
+                if (delta > oldValue) {
+                    swap(index, delta);
+                } 
+            }
+            
+        
+        }
+        if(areVectorsDifferent(upperStar, o_upperStar)){
+            std::vector<int> diff = findDifferences(o_upperStar, upperStar);
+            for(int i:diff){
+                
+                delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
+                
+                if(decp_data[i]>decp_data[index] or (decp_data[i]==decp_data[index] and i>index)){
                     delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
                     double oldValue = d_deltaBuffer[i];
                     if (delta > oldValue) {
                         swap(i, delta);
                     }  
-
-                    
                 }
-
-                
             }
-
-            else if(lowerStar.size()>o_lowerStar.size()||lowerWedges.size()>o_lowerWedges.size()){
-                // decrease value of the saddle point while > the true lower stars.
-                
-                double maximum = -DBL_MAX;
-                int max_id = -1;
-                for(int i:o_lowerStar){
-                    if(decp_data[i]>maximum) 
-                    {
-                        maximum = decp_data[i];
-                        max_id = i;
-                    }
-
-                }
-
-                double minimum = DBL_MAX;
-                int min_id = -1;
-                for(int i:diff){
-                    if(decp_data[i]<minimum) 
-                    {
-                        minimum = decp_data[i];
-                        min_id = i;
-                    }
-
-                }
-
+            diff = findDifferences(upperStar, o_upperStar);
+            if(diff.size() > 0){
                 delta = (input_data[index]-bound+decp_data[index])/2 - decp_data[index];
                 double oldValue = d_deltaBuffer[index];
                 if (delta > oldValue) {
                     swap(index, delta);
-                }  
-                
-                
-
-                
+                } 
             }
-        
-        }
-        if(upperWedges.size()!=o_upperWedges.size()  or areVectorsDifferent(upperStar, o_upperStar)){
-            std::vector<int> diff = findDifferences(upperStar,o_upperStar);
-            // negative lower stars.
-            
-            
-
-            if(upperStar.size()>o_upperStar.size() || upperWedges.size()>o_upperWedges.size()){
-
-                for(int i:diff){
-                    
-                    delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
-                    
-                    if(decp_data[i]>decp_data[index] or (decp_data[i]==decp_data[index] and i>index)){
-                        delta = (input_data[i]-bound+decp_data[i])/2 - decp_data[i];
-                        double oldValue = d_deltaBuffer[i];
-                        if (delta > oldValue) {
-                            swap(i, delta);
-                        }  
-                    }
-                    
-                    
-                }
-            }
-
-            else if(upperStar.size()<=o_upperStar.size() || upperWedges.size()<=o_upperWedges.size()){
-
-                if(upperStar.size()==o_upperStar.size()){
-                    diff = findDifference(o_upperStar, upperStar);
-                }
-                double minimum = DBL_MAX;
-                int min_id = -1;
-                for(int i:diff){
-                    if(decp_data[i]<minimum) 
-                    {
-                        minimum = decp_data[i];
-                        min_id = i;
-                    }
-
-                }
-                
-                delta = decp_data[index] - (decp_data[index]+input_data[index]-bound)/2;
-                if(decp_data[index]>decp_data[min_id] or (index>min_id and decp_data[index]==decp_data[min_id])){
-                delta = (input_data[index]-bound+decp_data[index])/2 - decp_data[index];
-                    double oldValue = d_deltaBuffer[index];
-                    if (delta > oldValue) {
-                        swap(index, delta);
-                    }  
-                }
-                
-
-                
-            }
-            
-            
         }
 
         return;
@@ -971,9 +905,9 @@ extern "C" {
         #pragma omp parallel for
         for(int tid = 0; tid < num_Elements; tid++)
         {
-            if(d_deltaBuffer[tid] != -2000 * bound){
+            if(d_deltaBuffer[tid] != -4.0 * bound){
                 
-                if(abs(d_deltaBuffer[tid]) > 1e-15 && abs(input_data[tid] - decp_data[tid] - d_deltaBuffer[tid])<=bound) decp_data[tid] += d_deltaBuffer[tid];
+                if(std::abs(d_deltaBuffer[tid]) > 1e-10 && std::abs(input_data[tid] - decp_data[tid] - d_deltaBuffer[tid])<=bound) decp_data[tid] += d_deltaBuffer[tid];
                 else decp_data[tid] = input_data[tid] - bound;
                 
             }
@@ -981,15 +915,35 @@ extern "C" {
     }
 
     void c_loops(){
-        
-        
-        classifyAllVertices(dec_vertex_type, decp_data, 1);
+        float vertexClassification = 0.0;
+        float get_fcp = 0.0;
+        float c_loopt = 0.0;
+        float init_deltat = 0.0;
+        float apply_deltat = 0.0;
+
+        auto start = std::chrono::high_resolution_clock::now();
+        classifyAllVertices(dec_vertex_type, decp_data, dec_lowerStars, dec_upperStars, 1);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        vertexClassification += duration.count();
+
+        start = std::chrono::high_resolution_clock::now();
         get_false_criticle_points();    
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        get_fcp += duration.count();
         
         while(count_f_max>0 or count_f_min>0 or count_f_saddle>0){
             std::cout<<"c_loops: "<<count_f_max<<", "<<count_f_min<<", "<<count_f_saddle<<std::endl;
+            
+            start = std::chrono::high_resolution_clock::now();
             init_delta();
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            init_deltat += duration.count();
 
+
+            start = std::chrono::high_resolution_clock::now();
             #pragma omp parallel for
             for(auto i = 0; i < count_f_max; i ++){
                 
@@ -1011,13 +965,37 @@ extern "C" {
                 int index = all_saddle[i];
                 get_false_stars(index);
             }
-            
-            
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            c_loopt += duration.count();
+
+            start = std::chrono::high_resolution_clock::now();
             apply_delta();
-            classifyAllVertices(dec_vertex_type, decp_data, 1);
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            apply_deltat += duration.count();
+
+            start = std::chrono::high_resolution_clock::now();
+            classifyAllVertices(dec_vertex_type, decp_data, dec_lowerStars, dec_upperStars, 1);
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            vertexClassification += duration.count();
+
+
+            start = std::chrono::high_resolution_clock::now();
             get_false_criticle_points();    
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            get_fcp += duration.count();
 
         }
+        float w_time = vertexClassification + get_fcp + c_loopt + init_deltat + apply_deltat;
+        std::cout<<"time ratio: "<<std::endl;
+        std::cout<<"classification: "<< vertexClassification/w_time<<std::endl;
+        std::cout<<"getfcp: "<< get_fcp/w_time<<std::endl;
+        std::cout<<"cloop: "<< c_loopt/w_time<<std::endl;
+        std::cout<<"init_delta: "<< init_deltat/w_time<<std::endl;
+        std::cout<<"apply_delta: "<< apply_deltat/w_time<<std::endl;
     }
 
     void get_vertex_traingle(){
@@ -1199,7 +1177,7 @@ extern "C" {
 
         
         std::sort(indexes, indexes + num_Elements, [&vec](int i, int j) {
-            return vec[i] < vec[j] || (vec[i] == vec[j] && i < j); 
+            return vec[i] < vec[j] || (std::abs(vec[i] -  vec[j]) == 0 && i < j); 
         });
 
         return;
@@ -1248,6 +1226,7 @@ extern "C" {
                     auto nextBranch = maximaTriplets[maximaTriplets[i].second];
                     // if those two branch's connected max is different
                     // && nextBranch's saddle is lager than current saddle
+                    
                     if(nextBranch.second != maximaTriplets[i].second
                         && nextBranch.first < maximaTriplets[i].first) { // we need to follow along larger
                         // saddles to the largestMax
@@ -1288,12 +1267,16 @@ extern "C" {
     void computeCP(std::vector<std::pair<int, int>> &maximaTriplets, std::vector<std::array<int, 46>> &saddleTriplets, 
                     const double *offset, const int *desManifold, const int *ascManifold, std::vector<int> &saddles2, 
                     std::vector<int> &maximum, int &globalMin, int translation){
+
         const int data_size = width * height * depth;
         int nSaddle2 = 0;
         int nMax = 0;
+
         maximum.clear();
         saddles2.clear();
+
         std::vector<int> saddles1;
+
         int nSaddle1 = 0;
         #pragma omp parallel for reduction(+:nSaddle2, nMax, nSaddle1)
         for(int VertexId = 0; VertexId < data_size; VertexId ++){
@@ -1322,11 +1305,11 @@ extern "C" {
         
         
         std::sort(saddles2.begin(), saddles2.end(), [&offset](int v, int u) {
-            return islarger(v, u, offset);
+            return offset[v] > offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v > u);
         });
 
         std::sort(maximum.begin(), maximum.end(), [&offset](int v, int u) {
-            return isless(v, u, offset);
+            return offset[v] < offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v < u);
         });
 
         
@@ -1339,7 +1322,7 @@ extern "C" {
         int *tempArray = new int[data_size];
         for(int i = 0; i < nMax; i++) {
             tempArray[maximum[i]] = i;
-            // std::cout<<input_data[maximum[i]]<<std::endl;
+            
         }
         
         findAscPaths(saddleTriplets, maximum, saddles2, saddles2.data(), maximum.data(), offset,
@@ -1377,6 +1360,7 @@ extern "C" {
         std::vector<int> maximumPointer(nMax);
         std::iota(std::begin(maximumPointer), std::end(maximumPointer), 0);
         int globalMax = nMax - 1;
+
         while(changed) {
             
             changed = false;
@@ -1390,14 +1374,13 @@ extern "C" {
                 for(int p = 0; p < triplet[44]; p++) {
                     
                     const auto &max = triplet[p];
-                    
                     if(max != globalMax) {
                         temp = largestSaddlesForMax[max];
                         if(i < temp) {
                         // save only maximum saddle
                         // smaller id -> larger saddles
-                        largestSaddlesForMax[max]
-                            = std::min(i, largestSaddlesForMax[max]);
+                            largestSaddlesForMax[max]
+                                = std::min(i, largestSaddlesForMax[max]);
                         }
                     }
                 }
@@ -1420,6 +1403,7 @@ extern "C" {
                         pairs[maximum] = std::make_pair(saddles2[largestSaddle], Maximum[maximum]);
                         auto largestMax = triplet[triplet[44] - 1];
                         maximumPointer[maximum] = largestMax;
+
                         maximaTriplets[maximum] = (std::make_pair(largestSaddle, largestMax));
                         lActiveMaxima.push_back(maximum);
                         
@@ -1463,22 +1447,22 @@ extern "C" {
         pairs[pairs.size() - 1] = std::make_pair(globalMin, Maximum[nMax - 1]);
         maximaTriplets[maximaTriplets.size() - 1] = std::make_pair(globalMin, maximaTriplets.size() - 1); // maximaTriplets[globalmax] = (globalmin, globalmax);
 
-        int counter = 0;
-        for(auto &item:maximaTriplets)
-        {
-            if(counter != maximaTriplets.size())
-            {
-                item.first = saddles2[item.first];
-                item.second = Maximum[item.second];
-                counter++;
-            }
-            else
-            {
-                item.second = Maximum[item.second];
-                counter++;
-            }
+        // int counter = 0;
+        // for(auto &item:maximaTriplets)
+        // {
+        //     if(counter != maximaTriplets.size())
+        //     {
+        //         item.first = saddles2[item.first];
+        //         item.second = Maximum[item.second];
+        //         counter++;
+        //     }
+        //     else
+        //     {
+        //         item.second = Maximum[item.second];
+        //         counter++;
+        //     }
             
-        }
+        // }
 
         
         return 1;
@@ -1705,7 +1689,7 @@ extern "C" {
         }
         
         double d = tmp_true_value - decp_data[true_index];
-        if(true_index==4)std::cout<<"delta is:"<<decp_data[true_index]<<", "<<decp_data[false_index]<<", "<<d<<std::endl;
+        
         double oldValue = d_deltaBuffer[true_index];
         
         if (d > oldValue) {
@@ -1724,10 +1708,7 @@ extern "C" {
             
             int true_index = wrong_rank_max_index[i*2];
             int false_index = wrong_rank_max_index[i*2+1];
-            // if(i == 0) {
-            //     std::cout<<true_index<< ", "<<false_index<<std::endl;
-            //     std::cout<<input_data[true_index]<< ", "<<input_data[false_index]<<std::endl;
-            // }
+            
             fix_wrong_index_max(true_index, false_index);
         }
 
@@ -1741,7 +1722,7 @@ extern "C" {
                         std::vector<std::pair<int, int>> &maximaTriplets,
                         std::vector<std::array<int, 46>> &saddleTriplets,
                         const double *offset,
-                        const int data_size){
+                        const int data_size, const int globalMin){
 
         int nMax = maximum.size();
         std::vector<std::pair<int, int>> persistencePairs;
@@ -1750,16 +1731,11 @@ extern "C" {
         
         constructPersistencePairs(persistencePairs, maximaTriplets, saddleTriplets, maximum.data(), saddles2.data(), nMax, globalMin);
         branches.resize(nMax);
-        std::cout<<nMax<<std::endl;
+
         int* order = getSortedPositions(offset, data_size);
         
         constructMergeTree(branches, maximaTriplets, maximum,
                            saddles2, order);
     }
-
-
-    
-
-    
 
 }
