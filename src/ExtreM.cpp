@@ -41,13 +41,23 @@ extern "C" {
     std::atomic_int count_f_max;
     std::atomic_int count_f_min;
     std::atomic_int count_f_saddle;
-    int number_of_false_cases, wrong_max_counter, wrong_saddle_counter, wrong_max_counter_2, globalMin, dec_globalMin;
+    int number_of_false_cases, wrong_max_counter, wrong_saddle_counter, wrong_saddle_counter_join, wrong_max_counter_2, globalMin, dec_globalMin;
+    int number_of_false_cases1, wrong_min_counter, wrong_min_counter_2;
     int *all_max, *all_min, *all_saddle;
+    
     std::vector<std::vector<int>> vertex_cells;
-    int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index, *wrong_rank_saddle, *wrong_rank_saddle_index, *wrong_rank_max_2, *wrong_rank_max_index_2;
+    int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors1, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index, *wrong_rank_saddle, *wrong_rank_saddle_index, *wrong_rank_max_2, *wrong_rank_max_index_2;
+    int *or_saddle_min_map, *wrong_neighbors_ds, *wrong_neighbors_ds_index, *wrong_rank_min, *wrong_rank_min_index, *wrong_rank_min_2, *wrong_rank_min_index_2;
+    int *wrong_rank_saddle_join, *wrong_rank_saddle_join_index;
+
     std::vector<std::array<int, 46>> saddleTriplets, dec_saddleTriplets;
+    std::vector<std::array<int, 46>> saddle1Triplets, dec_saddle1Triplets;
+
     std::vector<int> saddles2, maximum, dec_saddles2, dec_maximum, delta_counter;
+    std::vector<int> saddles1, minimum, dec_saddles1, dec_minimum;
     std::unordered_map<int, int> largestSaddlesForMax, dec_largestSaddlesForMax;
+    std::unordered_map<int, int> smallestSaddlesForMin, dec_smallestSaddlesForMin;
+    
     int *lowerStars, *upperStars, *dec_lowerStars, *dec_upperStars;
     int direction_to_index_mapping[26][3] = 
     {
@@ -86,7 +96,7 @@ extern "C" {
 
     void getdata(const std::string &filename, 
                 const double er, 
-                int data_size) {
+                int data_size, std::string type = "split") {
         
         
         std::ifstream file(filename, std::ios::binary | std::ios::ate);
@@ -108,6 +118,7 @@ extern "C" {
             return;
         }
 
+        
        
         SZ3::Config conf(data_size); 
         conf.cmprAlgo = SZ3::ALGO_INTERP_LORENZO;
@@ -127,15 +138,14 @@ extern "C" {
         double minValue = *std::min_element(input_data, input_data + data_size);
         double maxValue = *std::max_element(input_data, input_data + data_size);
         bound = (maxValue - minValue) * er;
-
+        
         std::cout << "Data read, compressed, and decompressed successfully." << std::endl;
     }
 
 
-    int ComputeDescendingManifold(const double *offset,
-                                  int *DS_M){
-        computePathCompressionSingle(DS_M, false, offset);
-        return 0;
+    int ComputeDescendingManifold(const double *offset, const int *vertex_type, int *DS_M){
+        // computePathCompressionSingle(DS_M, false, offset);
+        // return 0;
         #pragma omp parallel for
         for (int i = 0; i < num_Elements; i++) {
             int largest_neighbor = i;
@@ -152,55 +162,61 @@ extern "C" {
         
         for (int i = 0; i < num_Elements; ++i) {
             int v = i;
+            bool is_saddle_neighbor = false;
+            for(int j = 0; j<maxNeighbors; j++){
+                int neighborId = adjacency[i*maxNeighbors+j];
+                if(neighborId == -1) continue;
+                if(vertex_type[neighborId] == 2 || vertex_type[3]){
+                    is_saddle_neighbor = true;
+                    break;
+                }
+            }
+
+            if(!is_saddle_neighbor) continue;
             while(true){
                 int u = DS_M[v];
                 int w = DS_M[u];
                 if (u == w) break;
                 DS_M[v] = w;
             }
-            // while (DS_M[current_id] != current_id) {
-            //     if(i == 60111) std::cout<<"current is:"<<current_id<<", "<<DS_M[current_id]<<std::endl;
-            //     current_id = DS_M[current_id];
-            // }
-            // if(i == 60111) std::cout<<"current is:"<<DS_M[v]<<std::endl;
-            // DS_M[i] = DS_M[current_id];
+            
         }
 
         return 0;
     };
 
-        void getlabel(int* DS_M, int* AS_M, const int* direction_as, const int* direction_ds, int& un_sign_ds, int& un_sign_as){
-        
-            un_sign_ds = 0;
-            un_sign_as = 0;
-
-            #pragma omp parallel for reduction(+:un_sign_as) reduction(+:un_sign_ds)
-            
-            for(int i=0;i<num_Elements;i++){
-                int cur = AS_M[i];
-                if (cur!=-1 and direction_as[cur]!=-1){
-                    
-                    int direc = direction_as[cur];
-                    AS_M[i] = direc;
-                    if (direction_as[AS_M[i]] != -1){
-                        un_sign_as+=1;  
-                    }
-                    
-                }
+    void getlabel(int* DS_M, int* AS_M, const int* direction_as, const int* direction_ds, int& un_sign_ds, int& un_sign_as){
     
-            
-                cur = DS_M[i];
+        un_sign_ds = 0;
+        un_sign_as = 0;
+
+        #pragma omp parallel for reduction(+:un_sign_as) reduction(+:un_sign_ds)
+        
+        for(int i=0;i<num_Elements;i++){
+            int cur = AS_M[i];
+            if (cur!=-1 and direction_as[cur]!=-1){
                 
-                if (cur!=-1 and DS_M[i]!=-1){
-                    
-                    int direc = direction_ds[cur];
-                    DS_M[i] = direc;
-                    if (direction_ds[DS_M[i]]!=-1){
-                        un_sign_ds+=1;
-                        }
-                    } 
+                int direc = direction_as[cur];
+                AS_M[i] = direc;
+                if (direction_as[AS_M[i]] != -1){
+                    un_sign_as+=1;  
+                }
+                
             }
-            return;
+
+        
+            cur = DS_M[i];
+            
+            if (cur!=-1 and DS_M[i]!=-1){
+                
+                int direc = direction_ds[cur];
+                DS_M[i] = direc;
+                if (direction_ds[DS_M[i]]!=-1){
+                    un_sign_ds+=1;
+                    }
+                } 
+        }
+        return;
 
     }
 
@@ -245,8 +261,7 @@ extern "C" {
     int computePathCompressionSingle(
         int *const segmentation,
         const bool computeAscending,
-        const double *const offset
-        ) {
+        const double *const offset) {
         
         std::vector<int> activeVertices;
 
@@ -306,10 +321,8 @@ extern "C" {
     }
 
 
-    int ComputeAscendingManifold(const double *offset, 
-                                  int *AS_M){
-        computePathCompressionSingle(AS_M, true, offset);
-        return 0;
+    int ComputeAscendingManifold(const double *offset, const int *vertex_type, int *AS_M){
+       
         #pragma omp parallel for
         for (int i = 0; i < num_Elements; i++) {
             int largest_neighbor = i;
@@ -323,26 +336,29 @@ extern "C" {
             AS_M[i] = largest_neighbor;
         }
 
-        #pragma omp parallel for
-        for (int i = 0; i < num_Elements; i++)
-        {
+        
+        for (int i = 0; i < num_Elements; ++i) {
             int v = i;
+            bool is_saddle_neighbor = false;
+            for(int j = 0; j<maxNeighbors; j++){
+                int neighborId = adjacency[i*maxNeighbors+j];
+                if(neighborId == -1) continue;
+                if(vertex_type[neighborId] == 1 || vertex_type[3]){
+                    is_saddle_neighbor = true;
+                    break;
+                }
+            }
+
+            if(!is_saddle_neighbor) continue;
             while(true){
                 int u = AS_M[v];
                 int w = AS_M[u];
                 if (u == w) break;
                 AS_M[v] = w;
             }
-            // int current_id = AS_M[i];
-            // int next_id = AS_M[current_id];
-            // while(AS_M[next_id] != AS_M[AS_M[next_id]])
-            // {
-            //     AS_M[i] = next_id;
-            //     next_id = AS_M[next_id];
-            // }
-            // AS_M[i] = AS_M[next_id];
             
         }
+
         return 0;
     };
 
@@ -685,8 +701,9 @@ extern "C" {
         if(lowerComponentNumber == 0 && upperComponentNumber == 1) return 0;
         else if(lowerComponentNumber == 1 && upperComponentNumber == 0) return 4;
         else if(lowerComponentNumber == 1 && upperComponentNumber == 1) return 5;
-        else return 2;
-        // else if(lowerComponentNumber > 1 && upperComponentNumber == 1) return 1;
+        else if(lowerComponentNumber > 1 && upperComponentNumber > 1) return 3;
+        else if(lowerComponentNumber > 1) return 1;
+        else if(upperComponentNumber > 1) return 2;
         
             
 
@@ -700,18 +717,13 @@ extern "C" {
         
         #pragma omp parallel for
         for (int i = 0; i < num_Elements; ++i) {
-            // int type1[2];
-            // classifyVertex(i, heightMap, desManifold, ascManifold, type1);
-            // if(type1[1] == 2 && type1[0] == 2) vertex_type_tmp[i] = 2;
-            // else vertex_type_tmp[i] = type1[0];
             vertex_type_tmp[i] = classifyVertex1(heightMap, i, lowerStars, upperStars, type);
         }
     }
 
     void init_delta(){
         #pragma omp parallel for
-        for(int tid = 0; tid < num_Elements; tid++)
-        {
+        for(int tid = 0; tid < num_Elements; tid++){
             d_deltaBuffer[tid] = -4.0 * bound;
             delta_counter[tid] = 0;
         }    
@@ -750,7 +762,7 @@ extern "C" {
         while (update_successful == 0) {
             double current_value = d_deltaBuffer[index];
 
-            if (-delta > current_value) {
+            if (std::abs(delta) > current_value) {
                 
                 double swapped = atomicCASDouble(&d_deltaBuffer[index], current_value, delta);
                 if (swapped == current_value) {
@@ -762,108 +774,174 @@ extern "C" {
         }
     }
 
-    void c_loop(int index, int direction = 0)
-    {      
-        if (direction == 0){
-            
-            // if vertex is a regular point.
-            if (vertex_type[index]!=4){
+    void c_loop(int index, int direction = 0, std::string type = "split"){      
+        // preservation of split tree?->decrease f
+        if(type == "split"){
+            if (direction == 0){
                 
-                double d = ((input_data[index] - bound) + decp_data[index]) / 2.0 - decp_data[index];
-                double oldValue = d_deltaBuffer[index];
-                
-                if (d > oldValue) {
-                    swap(index, d);
-                }  
+                // if vertex is a regular point.
+                if (vertex_type[index]!=4){
+                    
+                    double d = ((input_data[index] - bound) + decp_data[index]) / 2.0 - decp_data[index];
+                    double oldValue = d_deltaBuffer[index];
+                    
+                    if (d > oldValue) {
+                        swap(index, d);
+                    }  
 
-                return;
-            
-            }
-            else{
+                    return;
                 
-                // if is a maximum in the original data;
-                
-                int largest_index = index;
-                
-                for(int i = 0; i< maxNeighbors;i++)
-                {
-                    int neighbor = adjacency[maxNeighbors * index + i];
-                    if(neighbor == -1) continue;
-                    if(islarger(neighbor, largest_index, decp_data))
-                    {
-                        largest_index = neighbor;
-                    }
                 }
+                else{
+                    
+                    // if is a maximum in the original data;
+                    int largest_index = index;
+                    
+                    for(int i = 0; i< maxNeighbors;i++)
+                    {
+                        int neighbor = adjacency[maxNeighbors * index + i];
+                        if(neighbor == -1) continue;
+                        if(islarger(neighbor, largest_index, decp_data))
+                        {
+                            largest_index = neighbor;
+                        }
+                    }
+                    
+                    if(decp_data[index]>decp_data[largest_index] or(decp_data[index]==decp_data[largest_index] and index>largest_index)){
+                        return;
+                    }
+
+                    double d = ((input_data[largest_index] - bound) + decp_data[largest_index]) / 2.0 - decp_data[largest_index];
+                    
+                    double oldValue = d_deltaBuffer[largest_index];
+                    if (d > oldValue) {
+                        swap(largest_index, d);
+                    }  
+
+                    return;
+                }
+            }
+            
+            else if (direction != 0){
                 
-                if(decp_data[index]>decp_data[largest_index] or(decp_data[index]==decp_data[largest_index] and index>largest_index)){
+                if (vertex_type[index]!=0){
+                    int smallest_index = index;
+                    for(int i = 0; i<maxNeighbors;i++)
+                    {
+                        int neighbor = adjacency[maxNeighbors * index + i];
+                        if(neighbor == -1) continue;
+                        if(isless(neighbor, smallest_index, input_data))
+                        {
+                            smallest_index = neighbor;
+                        }
+                    }
+                    double d = ((input_data[smallest_index] - bound) + decp_data[smallest_index]) / 2.0 - decp_data[smallest_index];
+                    if(decp_data[index]>decp_data[smallest_index] or (decp_data[index]==decp_data[smallest_index] and index>smallest_index)){
+                        return;
+                    }
+                    double oldValue = d_deltaBuffer[smallest_index];
+                    if (d > oldValue) {
+                        swap(smallest_index, d);
+                    }  
+                    return;
+                
+                }
+            
+                else{
+                    double d = ((input_data[index] - bound) + decp_data[index]) / 2.0 - decp_data[index];
+                    double oldValue = d_deltaBuffer[index];
+                    if (d > oldValue) {
+                        swap(index, d);
+                    } 
                     return;
                 }
 
-                double d = ((input_data[largest_index] - bound) + decp_data[largest_index]) / 2.0 - decp_data[largest_index];
                 
-                double oldValue = d_deltaBuffer[largest_index];
-                if (d > oldValue) {
-                    swap(largest_index, d);
-                }  
-
-                return;
-            }
-            
-            
-        
+            }    
         }
-        
-        else if (direction != 0){
-            
-            if (vertex_type[index]!=0){
-                int smallest_index = index;
+        // preservation of join tree?->increase -f
+        else{
+            if (direction == 0){
                 
-                for(int i = 0; i<maxNeighbors;i++)
-                {
-                    int neighbor = adjacency[maxNeighbors * index + i];
-                    if(neighbor == -1) continue;
-                    if(isless(neighbor, smallest_index, input_data))
-                    {
-                        smallest_index = neighbor;
+                // if vertex is a regular point, need to increase its largest neighbor.
+                if (vertex_type[index]!=4){
+                    int largest_index = index;
+                    
+                    for(int i = 0; i< maxNeighbors; i++){
+                        int neighbor = adjacency[maxNeighbors * index + i];
+                        if(neighbor == -1) continue;
+                        if(islarger(neighbor, largest_index, input_data)){
+                            largest_index = neighbor;
+                        }
                     }
-                }
-                
+                    
+                    if(decp_data[index]<decp_data[largest_index] or(decp_data[index]==decp_data[largest_index] and index<largest_index)){
+                        return;
+                    }
 
-                double d = ((input_data[smallest_index] - bound) + decp_data[smallest_index]) / 2.0 - decp_data[smallest_index];
+                    double d = ((input_data[largest_index] + bound) + decp_data[largest_index]) / 2.0 - decp_data[largest_index];
+                    
+                    double oldValue = d_deltaBuffer[largest_index];
+                    if (d > oldValue) {
+                        swap(largest_index, d);
+                    }  
+
+                    return;
                 
-                if(decp_data[index]>decp_data[smallest_index] or (decp_data[index]==decp_data[smallest_index] and index>smallest_index)){
+                }
+                else{
+                    
+                    // if is a maximum in the original data, need to increase itself;
+                    double d = ((input_data[index] + bound) + decp_data[index]) / 2.0 - decp_data[index];
+                    double oldValue = d_deltaBuffer[index];
+                    
+                    if (d > oldValue) {
+                        swap(index, d);
+                    }  
+
+                    return;
+                    
+                }
+            }
+            
+            else if (direction != 0){
+                // if a regular point in the original data, need to increase itself.
+                if (vertex_type[index]!=0){
+                    
+                    double d = ((input_data[index] + bound) + decp_data[index]) / 2.0 - decp_data[index];
+                    double oldValue = d_deltaBuffer[index];
+                    if (d > oldValue) {
+                        swap(index, d);
+                    } 
                     return;
                 }
-                double oldValue = d_deltaBuffer[smallest_index];
-                if (d > oldValue) {
-                    swap(smallest_index, d);
-                }  
-
-                return;
             
-            }
-        
-            else{
+                else{
+                    
+                    int smallest_index = index;
+                    for(int i = 0; i<maxNeighbors;i++){
+                        int neighbor = adjacency[maxNeighbors * index + i];
+                        if(neighbor == -1) continue;
+                        if(isless(neighbor, smallest_index, decp_data)){
+                            smallest_index = neighbor;
+                        }
+                    }
+                    double d = ((input_data[smallest_index] + bound) + decp_data[smallest_index]) / 2.0 - decp_data[smallest_index];
+                    
+                    if(decp_data[index]<decp_data[smallest_index] or (decp_data[index]==decp_data[smallest_index] and index<smallest_index)){
+                        return;
+                    }
+                    
+                    double oldValue = d_deltaBuffer[smallest_index];
+                    if (d > oldValue) {
+                        swap(smallest_index, d);
+                    }  
+                    return;
+                }
+
                 
-                
-                double d = ((input_data[index] - bound) + decp_data[index]) / 2.0 - decp_data[index];
-                
-                double oldValue = d_deltaBuffer[index];
-                if (d > oldValue) {
-                    swap(index, d);
-                }  
-
-                return;
-
-
-                
-            }
-
-            
-        }    
-        
-
-        
+            }  
+        }
 
         return;
     }
@@ -901,10 +979,15 @@ extern "C" {
                     all_saddle[idx_fp_saddle] = i;
                 }
 
+                if((type1==3 and vertex_type[i]!=3) or (type1!=3 and vertex_type[i]==3)){
+                    int idx_fp_saddle = std::atomic_fetch_add(&count_f_saddle, 1);
+                    all_saddle[idx_fp_saddle] = i;
+                }
+
 
             }
 
-            else if(type1==2 and vertex_type[i]==2 || type1== 1 and vertex_type[i]==1){
+            else if(type1==2 and vertex_type[i]==2 || type1== 1 and vertex_type[i]==1 || type1== 3 and vertex_type[i]==3){
                     // std::vector<int> lowerStar, upperStar, or_lowerStar, or_upperStar;
                     double currentHeight = decp_data[i];
                     double or_currentHeight = input_data[i];
@@ -924,15 +1007,11 @@ extern "C" {
 
     }
 
-
-
     std::vector<int> findDifferences(const std::vector<int>& vec1, const std::vector<int>& vec2) {
         std::set<int> set1(vec1.begin(), vec1.end());
         std::set<int> set2(vec2.begin(), vec2.end());
         std::vector<int> differences;
 
-
-        
         for (const auto& elem : set2) {
             if (set1.find(elem) == set1.end()) {
                 differences.push_back(elem);
@@ -955,7 +1034,7 @@ extern "C" {
         return difference;
     }
 
-    void get_false_stars(int index){
+    void get_false_stars(int index, std::string type="split"){
         // std::vector<int > lowerStar, upperStar;
         double delta;
         std::vector<int> lowerStar(dec_lowerStars + (maxNeighbors+1) * index, dec_lowerStars + (maxNeighbors+1) * index + dec_lowerStars[index * (maxNeighbors + 1) + maxNeighbors]);
@@ -963,49 +1042,84 @@ extern "C" {
         std::vector<int> o_lowerStar(lowerStars + (maxNeighbors+1) * index, lowerStars + (maxNeighbors+1) * index + lowerStars[index * (maxNeighbors + 1) + maxNeighbors]);
         std::vector<int> o_upperStar(upperStars + (maxNeighbors+1) * index, upperStars + (maxNeighbors+1) * index + upperStars[index * (maxNeighbors + 1) + maxNeighbors]);
         
-        
-        if(areVectorsDifferent(lowerStar, o_lowerStar)){
-            std::vector<int> diff = findDifferences(lowerStar,o_lowerStar);
-            
-            // decrease value of the negative lower star.
+        if(type == "split"){
+            if(areVectorsDifferent(lowerStar, o_lowerStar)){
+                std::vector<int> diff = findDifferences(lowerStar,o_lowerStar);
                 
-            for(int i:diff){
-                delta = (input_data[i]-bound) - decp_data[i];
-                double oldValue = d_deltaBuffer[i];
-                if (delta > oldValue) {
-                    swap(i, delta);
-                }  
+                // decrease value of the negative lower star.
+                    
+                for(int i:diff){
+                    delta = (input_data[i]-bound) - decp_data[i];
+                    double oldValue = d_deltaBuffer[i];
+                    if (delta > oldValue) {
+                        swap(i, delta);
+                    }  
 
-            }
+                }
 
-            diff = findDifferences(o_lowerStar, lowerStar);
-            if(diff.size() > 0){
-                delta = (input_data[index]-bound) - decp_data[index];
-                double oldValue = d_deltaBuffer[index];
-                if (delta > oldValue) {
-                    swap(index, delta);
-                } 
+                diff = findDifferences(o_lowerStar, lowerStar);
+                if(diff.size() > 0){
+                    delta = (input_data[index]-bound) - decp_data[index];
+                    double oldValue = d_deltaBuffer[index];
+                    if (delta > oldValue) {
+                        swap(index, delta);
+                    } 
+                }
+            
             }
-        
         }
+        else{
+            if(areVectorsDifferent(upperStar, o_upperStar)){
+                
+                std::vector<int> diff = findDifferences(upperStar, o_upperStar);
+                // decrease value of the negative upper star.
+                for(int i:diff){
+                    delta = (input_data[i]+bound) - decp_data[i];
+                    if(index==1239) std::cout<<i<<":"<<delta<<", "<<input_data[i]+bound<<", "<<decp_data[i]+delta<<std::endl;
+                    double oldValue = d_deltaBuffer[i];
+                    if (delta > oldValue) {
+                        swap(i, delta);
+                    } 
+                }
+                // if(diff.size() > 0){
+                //     delta = (input_data[index]+bound) - decp_data[index];
+                //     double oldValue = d_deltaBuffer[index];
+                //     if (delta > oldValue) {
+                //         swap(index, delta);
+                //     }  
+                // }
+                
+                diff = findDifferences(o_upperStar, upperStar);
+                if(diff.size() > 0){
+                    delta = (input_data[index]+bound) - decp_data[index];
+                    double oldValue = d_deltaBuffer[index];
+                    if (delta > oldValue) {
+                        swap(index, delta);
+                    }  
+                }
+                
+            
+            }
+        }
+        
 
         return;
         
         
     }
 
-    void apply_delta(){
+    void apply_delta(std::string type){
         #pragma omp parallel for
-        for(int tid = 0; tid < num_Elements; tid++)
-        {
+        for(int tid = 0; tid < num_Elements; tid++){
             if(d_deltaBuffer[tid] != -4.0 * bound){
                 
-                if(std::abs(d_deltaBuffer[tid]) > 1e-15 && delta_counter[tid]<5 && std::abs(input_data[tid] - decp_data[tid] - d_deltaBuffer[tid])<bound) {
+                if(std::abs(d_deltaBuffer[tid]) > 1e-15 && delta_counter[tid]<5 && std::abs(input_data[tid] - decp_data[tid] - d_deltaBuffer[tid])<=bound) {
                     decp_data[tid] += d_deltaBuffer[tid];
                     delta_counter[tid] += 1;
                 }
                 else{
-                    decp_data[tid] = input_data[tid] - bound;
+                    if(type == "split") decp_data[tid] = input_data[tid] - bound;
+                    else decp_data[tid] = input_data[tid] + bound;
                     delta_counter[tid] = 6;
                 }
                 
@@ -1013,7 +1127,7 @@ extern "C" {
         }
     }
 
-    void c_loops(){
+    void c_loops(std::string type = "split"){
         float vertexClassification = 0.0;
         float get_fcp = 0.0;
         float c_loopt = 0.0;
@@ -1047,7 +1161,8 @@ extern "C" {
             for(auto i = 0; i < count_f_max; i ++){
                 
                 int critical_i = all_max[i];
-                c_loop(critical_i);
+                
+                c_loop(critical_i, 0, type);
 
             }                
                 
@@ -1055,21 +1170,20 @@ extern "C" {
             for(auto i = 0; i < count_f_min; i ++){
 
                 int critical_i = all_min[i];
-                c_loop(critical_i, 1);
-
+                c_loop(critical_i, 1, type);
             }
                 
             #pragma omp parallel for
             for(int i =0;i<count_f_saddle;i++){
                 int index = all_saddle[i];
-                get_false_stars(index);
+                get_false_stars(index, type);
             }
             end = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             c_loopt += duration.count();
 
             start = std::chrono::high_resolution_clock::now();
-            apply_delta();
+            apply_delta(type);
             end = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             apply_deltat += duration.count();
@@ -1083,24 +1197,19 @@ extern "C" {
 
             start = std::chrono::high_resolution_clock::now();
             get_false_criticle_points();    
+            
             end = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             get_fcp += duration.count();
 
         }
         float w_time = vertexClassification + get_fcp + c_loopt + init_deltat + apply_deltat;
-        // std::cout<<"time ratio: "<<std::endl;
-        // std::cout<<"classification: "<< vertexClassification/w_time<<std::endl;
-        // std::cout<<"getfcp: "<< get_fcp/w_time<<std::endl;
-        // std::cout<<"cloop: "<< c_loopt/w_time<<std::endl;
-        // std::cout<<"init_delta: "<< init_deltat/w_time<<std::endl;
-        // std::cout<<"apply_delta: "<< apply_deltat/w_time<<std::endl;
+        
     }
 
     void get_vertex_traingle(){
         int numFaces = 2 * (width - 1) * (height - 1);
-        for(int i = 0; i<numFaces; i++)
-        {
+        for(int i = 0; i<numFaces; i++){
             int v1, v2, v3;
             
             getVerticesFromTriangleID1(i, v1, v2, v3);
@@ -1109,15 +1218,14 @@ extern "C" {
             vertex_cells[v3].push_back(i);
         }
     }
+
     void findAscPaths(  std::vector<std::array<int, 46>> &saddleTriplets,
                         std::vector<int> &maximaLocalToGlobal,
                         std::vector<int> &saddlesLocalToGlobal,
                         const int *saddles2, const int *maximum,
                         const double *offset,
                         const int *desManifold, const int *ascManifold, int &counter_tmp){
-        
-        
-        
+    
         for(int i = 0; i < saddlesLocalToGlobal.size(); i++) {
             const int vertexId = saddles2[i];
             
@@ -1151,6 +1259,50 @@ extern "C" {
         
         return;
     }
+
+    void findDesPaths(  std::vector<std::array<int, 46>> &saddleTriplets,
+                        std::vector<int> &maximaLocalToGlobal,
+                        std::vector<int> &saddlesLocalToGlobal,
+                        const int *saddles2, const int *maximum,
+                        const double *offset,
+                        const int *desManifold, const int *ascManifold, int &counter_tmp){
+        
+        
+        
+        for(int i = 0; i < saddlesLocalToGlobal.size(); i++) {
+            const int vertexId = saddles2[i];
+            
+            auto &triplet = saddleTriplets[i];
+            
+            triplet[44] = 0;
+            
+            for(int k = 0; k < maxNeighbors; k++)
+            {
+                const int neighborId = adjacency[maxNeighbors * vertexId + k];
+                
+                if(neighborId == -1) continue;
+                if(isless(neighborId, vertexId, offset)) {
+                    triplet[triplet[44]] = ascManifold[desManifold[neighborId]];
+                    triplet[44]++;
+                }
+                
+            }
+            sortAndRemoveDuplicates(triplet);
+        }
+
+        
+
+        
+
+        int edgesInEG = 0;
+        for(int i = 0; i < saddlesLocalToGlobal.size(); i++) {
+            auto &triplet = saddleTriplets[i];
+            edgesInEG += triplet[44];
+        }
+        
+        return;
+    }
+
 
     int computeNumberOfLinkComponents(const int* linkVertices, const int nLinkVertices){
         std::unordered_map<int, int> linkVerticesMap;
@@ -1310,7 +1462,6 @@ extern "C" {
         return;
     }
 
-
     int* getSortedPositions(const double* arr, int n) {
             int* indices = new int[n];    
             int* positions = new int[n];  
@@ -1391,116 +1542,218 @@ extern "C" {
       return 1;
     }
 
-    void computeCP(std::vector<std::pair<int, int>> &maximaTriplets, std::vector<std::array<int, 46>> &saddleTriplets, 
-                    const double *offset, const int *desManifold, const int *ascManifold, std::vector<int> &saddles2, 
+    void computeCP(std::vector<std::pair<int, int>> &maximaTriplets, std::vector<std::pair<int, int>> &minimumTriplets, 
+                    std::vector<std::array<int, 46>> &saddleTriplets, std::vector<std::array<int, 46>> &saddle1Triplets, 
+                    const double *offset, const int *desManifold, const int *ascManifold,
+                    const int *vertex_type_tmp, std::vector<int> &saddles2, 
+                    std::vector<int> &saddles1, std::vector<int> &minimum,
                     std::vector<int> &maximum, int &globalMin, int translation){
         
 
         const int data_size = width * height * depth;
         int nSaddle2 = 0;
         int nMax = 0;
+        int nSaddle1 = 0;
+        int nMin = 0;
 
         maximum.clear();
+        minimum.clear();
         saddles2.clear();
+        saddles1.clear();
 
-        std::vector<int> saddles1;
+        #pragma omp parallel reduction(+:nSaddle2, nMax, nSaddle1)
+        {
+            std::vector<int> local_saddles2, local_saddles1, local_maximum, local_minimum;
 
-        int nSaddle1 = 0;
-        for(int VertexId = 0; VertexId < data_size; VertexId++){
-            int type[2];
-            
-            classifyVertex(VertexId, offset, desManifold, ascManifold, type);
-            if(type[0] == 2 || type[1] == 2) {
-                nSaddle2++;
-                saddles2.push_back(VertexId);
+            #pragma omp for
+            for(int VertexId = 0; VertexId < data_size; VertexId++) {
+
+                if(vertex_type_tmp[VertexId] == 2 || vertex_type_tmp[VertexId] == 3) {
+                    nSaddle2++;
+                    local_saddles2.push_back(VertexId);
+                }
+
+                if(vertex_type_tmp[VertexId] == 1 || vertex_type_tmp[VertexId] == 3) {
+                    nSaddle1++;
+                    local_saddles1.push_back(VertexId);
+                }
+
+                if(vertex_type_tmp[VertexId] == 4) {
+                    nMax++;
+                    local_maximum.push_back(VertexId);
+                }
+
+                if(vertex_type_tmp[VertexId] == 0) {
+                    nMin++;
+                    local_minimum.push_back(VertexId);
+                }
             }
 
-            if(type[0] == 1 || type[1] == 1) {
-                nSaddle1++;
-                saddles1.push_back(VertexId);
+            // 合并结果
+            #pragma omp critical
+            {
+                saddles2.insert(saddles2.end(), local_saddles2.begin(), local_saddles2.end());
+                saddles1.insert(saddles1.end(), local_saddles1.begin(), local_saddles1.end());
+                maximum.insert(maximum.end(), local_maximum.begin(), local_maximum.end());
+                minimum.insert(minimum.end(), local_minimum.begin(), local_minimum.end());
             }
-
-            if(type[0] == 4) {
-                nMax++;
-                maximum.push_back(VertexId);
-            }
-            // if(VertexId == 60415) std::cout<<type[0]<<", "<<type[1]<<std::endl;
-
         }
-        // #pragma omp parallel reduction(+:nSaddle2, nMax, nSaddle1)
-        // {
-        //     std::vector<int> local_saddles2, local_saddles1, local_maximum;
-
-        //     #pragma omp for
-        //     for(int VertexId = 0; VertexId < data_size; VertexId++) {
-        //         int type[2];
-        //         classifyVertex(VertexId, offset, desManifold, ascManifold, type);
-
-        //         if(type[0] == 2 || type[1] == 2) {
-        //             nSaddle2++;
-        //             local_saddles2.push_back(VertexId);
-        //         }
-
-        //         if(type[0] == 1 || type[1] == 1) {
-        //             nSaddle1++;
-        //             local_saddles1.push_back(VertexId);
-        //         }
-
-        //         if(type[0] == 4) {
-        //             nMax++;
-        //             local_maximum.push_back(VertexId);
-        //         }
-        //     }
-
-        //     // 合并结果
-        //     #pragma omp critical
-        //     {
-        //         saddles2.insert(saddles2.end(), local_saddles2.begin(), local_saddles2.end());
-        //         saddles1.insert(saddles1.end(), local_saddles1.begin(), local_saddles1.end());
-        //         maximum.insert(maximum.end(), local_maximum.begin(), local_maximum.end());
-        //     }
-        // }
         
         
         std::sort(saddles2.begin(), saddles2.end(), [&offset](int v, int u) {
             return offset[v] > offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v > u);
         });
 
+        std::sort(saddles1.begin(), saddles1.end(), [&offset](int v, int u) {
+            return offset[v] < offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v < u);
+        });
+
         std::sort(maximum.begin(), maximum.end(), [&offset](int v, int u) {
             return offset[v] < offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v < u);
         });
 
+        // minimum is ranking as descending order, first is the largest minimum
+        // need to find saddle1's recheable minimum, and recheable minimum ranking ascending.
+        std::sort(minimum.begin(), minimum.end(), [&offset](int v, int u) {
+            return offset[v] > offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v > u);
+        });
+
         saddleTriplets.clear();
         saddleTriplets.resize(nSaddle2);
-        
+
+        saddle1Triplets.clear();
+        saddle1Triplets.resize(nSaddle1);
+
+        nMax = maximum.size();
+        nMin = minimum.size();
 
         int *tempArray = new int[data_size];
         for(int i = 0; i < nMax; i++) {
             tempArray[maximum[i]] = i;
-            
         }
+
+        int *tempArray1 = new int[data_size];
+        for(int i = 0; i < nMin; i++) {
+            tempArray1[minimum[i]] = i;
+        }
+
         int counter_tmp = 0;
         findAscPaths(saddleTriplets, maximum, saddles2, saddles2.data(), maximum.data(), offset,
                     desManifold, tempArray, counter_tmp);
 
+        counter_tmp = 0;
+        findDesPaths(saddle1Triplets, minimum, saddles1, saddles1.data(), minimum.data(), offset,
+                    ascManifold, tempArray1, counter_tmp);
+
         
         int q = 0;
-        for(auto &item:saddleTriplets)
-        {
+        for(auto &item:saddleTriplets){
             item[45] = saddles2[q++];
+        }
+
+        q = 0;
+        for(auto &item:saddle1Triplets){
+            item[45] = saddles1[q++];
         }
             
         if(translation == 0) return;
-        
-
+    
         int *sortedVertex = new int[data_size];
         getSortedIndexes(offset, sortedVertex);
         globalMin = sortedVertex[0];
+        
+        return; 
+    }
+
+    // void computeCP(std::vector<std::pair<int, int>> &maximaTriplets, std::vector<std::array<int, 46>> &saddleTriplets, 
+    //                 const double *offset, const int *desManifold, const int *vertex_type_tmp, std::vector<int> &saddles2, 
+    //                 std::vector<int> &maximum, int &globalMin, int translation){
+        
+
+    //     const int data_size = width * height * depth;
+    //     int nSaddle2 = 0;
+    //     int nMax = 0;
+
+    //     maximum.clear();
+    //     saddles2.clear();
+
+    //     std::vector<int> saddles1;
+
+    //     int nSaddle1 = 0;
+    //     #pragma omp parallel reduction(+:nSaddle2, nMax, nSaddle1)
+    //     {
+    //         std::vector<int> local_saddles2, local_saddles1, local_maximum, local_minimum;
+
+    //         #pragma omp for
+    //         for(int VertexId = 0; VertexId < data_size; VertexId++) {
+                
+    //             if(vertex_type_tmp[VertexId] == 2 || vertex_type_tmp[VertexId] == 3) {
+    //                 nSaddle2++;
+    //                 local_saddles2.push_back(VertexId);
+    //             }
+
+    //             if(vertex_type_tmp[VertexId] == 1 || vertex_type_tmp[VertexId] == 3) {
+    //                 nSaddle1++;
+    //                 local_saddles1.push_back(VertexId);
+    //             }
+
+    //             if(vertex_type_tmp[VertexId] == 4) {
+    //                 nMax++;
+    //                 local_maximum.push_back(VertexId);
+    //             }
+
+    //         }
+
+            
+    //         #pragma omp critical
+    //         {
+    //             saddles2.insert(saddles2.end(), local_saddles2.begin(), local_saddles2.end());
+    //             saddles1.insert(saddles1.end(), local_saddles1.begin(), local_saddles1.end());
+    //             maximum.insert(maximum.end(), local_maximum.begin(), local_maximum.end());
+                
+    //         }
+    //     }
+
+    //     std::sort(saddles2.begin(), saddles2.end(), [&offset](int v, int u) {
+    //         return offset[v] > offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v > u);
+    //     });
+
+    //     std::sort(maximum.begin(), maximum.end(), [&offset](int v, int u) {
+    //         return offset[v] < offset[u] || ((std::abs(offset[v] - offset[u])) == 0 && v < u);
+    //     });
+
+    //     saddleTriplets.clear();
+    //     saddleTriplets.resize(nSaddle2);
+        
+
+    //     int *tempArray = new int[data_size];
+    //     for(int i = 0; i < nMax; i++) {
+    //         tempArray[maximum[i]] = i;
+            
+    //     }
+
+    //     int counter_tmp = 0;
+    //     findAscPaths(saddleTriplets, maximum, saddles2, saddles2.data(), maximum.data(), offset,
+    //                 desManifold, tempArray, counter_tmp);
+
+        
+    //     int q = 0;
+    //     for(auto &item:saddleTriplets)
+    //     {
+    //         item[45] = saddles2[q++];
+    //     }
+            
+    //     if(translation == 0) return;
+        
+
+    //     int *sortedVertex = new int[data_size];
+    //     getSortedIndexes(offset, sortedVertex);
+    //     globalMin = sortedVertex[0];
 
         
 
-        return; 
-    }
+    //     return; 
+    // }
 
     int constructPersistencePairs(std::vector<std::pair<int, int>> &pairs,
                                     std::vector<std::pair<int, int>> &maximaTriplets,
@@ -1650,6 +1903,35 @@ extern "C" {
 
     }
 
+    int computeMinLabel(int i, const double *offset){
+        
+        int current_id = i;
+        int largest_neighbor = current_id;  
+
+        while (true) {
+            int next_largest_neighbor = largest_neighbor;
+            
+            for (int j = 0; j < maxNeighbors; j++) {
+                int neighbor_id = adjacency[maxNeighbors * current_id + j];
+                if (neighbor_id == -1) continue;  
+
+                
+                if (offset[next_largest_neighbor] > offset[neighbor_id] || 
+                (offset[next_largest_neighbor] == offset[neighbor_id] && next_largest_neighbor > neighbor_id)) {
+                    next_largest_neighbor = neighbor_id;
+                }
+            }
+
+            if (next_largest_neighbor == largest_neighbor) break;
+
+            current_id = next_largest_neighbor;
+            largest_neighbor = next_largest_neighbor;
+        }
+
+        return current_id;
+
+    }
+
     void computelargestSaddlesForMax(const int nMax, 
                                     const std::vector<std::array<int, 46>> &saddleTriplets, 
                                     std::unordered_map<int, int> &largestSaddlesForMax,
@@ -1668,18 +1950,46 @@ extern "C" {
             auto &triplet = saddleTriplets[i];
             int temp;
             for(int p = 0; p < triplet[44]; p++) {
-                // 5170 5385
-                
+               
                 const auto &max = triplet[p];
                 
                 if(max != globalMax) {
                     temp = largestSaddlesForMax[(*maximum)[max]];
                     if(i < temp) {
-                    // save only maximum saddle
-                    // smaller id -> larger saddles
-                    
                         largestSaddlesForMax[(*maximum)[max]]
                             = std::min(i, largestSaddlesForMax[(*maximum)[max]]);
+                    }
+                }
+            }
+        }
+    }
+
+    void computesmallestSaddlesForMin(const int nMin, 
+                                    const std::vector<std::array<int, 46>> &saddleTriplets, 
+                                    std::unordered_map<int, int> &smallestSaddlesForMin,
+                                    const std::vector<int> *minimum){
+        // saddle is stored by descending rank;
+        // find the smallest saddle connected with eahc min;
+        smallestSaddlesForMin.clear();
+        for(int i = 0; i < nMin; i++){
+            smallestSaddlesForMin[(*minimum)[i]] = saddleTriplets.size();
+        }
+
+        
+        int globalMin = nMin - 1;
+        
+        for(int i = 0; i < (int)saddleTriplets.size(); i++) {
+            auto &triplet = saddleTriplets[i];
+            int temp;
+            for(int p = 0; p < triplet[44]; p++) {
+               
+                const auto &min = triplet[p];
+                
+                if(min != globalMin) {
+                    temp = smallestSaddlesForMin[(*minimum)[min]];
+                    if(i < temp) {
+                        smallestSaddlesForMin[(*minimum)[min]]
+                            = std::min(i, smallestSaddlesForMin[(*minimum)[min]]);
                     }
                 }
             }
@@ -1702,8 +2012,23 @@ extern "C" {
         return;
     }
 
-    void get_wrong_neighbors(int saddle, int &num_false_cases, const double *offset)
-    {
+    void compute_Min_for_Saddle(int saddle, const double *offset){
+        int label_count = 0;
+        for(int j = 0; j< maxNeighbors; j++)
+        {
+            int neighborId = adjacency[ maxNeighbors * saddle + j];
+            if(neighborId == -1) continue;
+            if(isless(neighborId, saddle, offset)){
+                int l = computeMinLabel(neighborId, offset);
+                or_saddle_min_map[saddle * 4 + label_count] = l;
+                label_count++;
+            }
+
+        }
+        return;
+    }
+
+    void get_wrong_split_neighbors(int saddle, int &num_false_cases, const double *offset){
         int label_count = 0;
         for(int j = 0; j< maxNeighbors; j++)
         {
@@ -1726,7 +2051,31 @@ extern "C" {
         }
     }
 
-    int fixpath(int i, int direction = 0){
+    void get_wrong_join_neighbors(int saddle, int &num_false_cases, const double *offset){
+        int label_count = 0;
+        for(int j = 0; j< maxNeighbors; j++)
+        {
+            int neighborId = adjacency[ maxNeighbors * saddle + j];
+            if(neighborId == -1) continue;
+
+            if(isless(neighborId, saddle, offset)){
+                
+                int l = computeMinLabel(neighborId, offset);
+                if(l!=or_saddle_min_map[saddle * 4 + label_count]){
+                    if(wrong_neighbors_ds[neighborId] == 0){
+                        wrong_neighbors_ds[neighborId] = 1;
+                        wrong_neighbors_ds_index[num_false_cases] = neighborId;
+                        num_false_cases++;
+                        return;
+                    }
+                }
+                label_count++;
+            }
+
+        }
+    }
+
+    int fixpath(int i, int direction = 0, std::string type = "split"){
         double delta;
         int true_index = -1;
         int false_index = -1;
@@ -1770,19 +2119,29 @@ extern "C" {
                 return 0;
             }
             
-            double d = ((input_data[false_index] - bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
+            if(type == "split"){
+                double d = ((input_data[false_index] - bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
             
-            double oldValue = d_deltaBuffer[false_index];
-            if (d > oldValue) {
-                swap(false_index, d);
-            }  
+                double oldValue = d_deltaBuffer[false_index];
+                if (d > oldValue) {
+                    swap(false_index, d);
+                } 
+            }
+            else{
+                double d = ((input_data[true_index] + bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
+            
+                double oldValue = d_deltaBuffer[true_index];
+                if (d > oldValue) {
+                    swap(true_index, d);
+                } 
+            }
+             
 
             return 0;
             
         }
 
-        else 
-        {
+        else {
             
             int current_id = i;
             int largest_neighbor = current_id;  
@@ -1818,11 +2177,21 @@ extern "C" {
 
             if(false_index==true_index) return 0;
 
-            double d = ((input_data[true_index] - bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
-            double oldValue = d_deltaBuffer[true_index];
-            if (d > oldValue) {
-                swap(true_index, d);
-            }  
+            if(type == "split"){
+                double d = ((input_data[true_index] - bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
+                double oldValue = d_deltaBuffer[true_index];
+                if (d > oldValue) {
+                    swap(true_index, d);
+                } 
+            }
+            else{
+                double d = ((input_data[false_index] + bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
+                double oldValue = d_deltaBuffer[false_index];
+                if (d > oldValue) {
+                    swap(false_index, d);
+                } 
+            }
+             
 
             return 0;
             
@@ -1831,15 +2200,22 @@ extern "C" {
         return 0;
     }
 
-    void r_loops(){
+    void r_loops(std::string type = "split"){
         
         init_delta();
         for(int i = 0;i< number_of_false_cases; i++)
         {
             int id = wrong_neighbors_index[i];
-            fixpath(id, 0);
+            fixpath(id, 0, type);
         }
-        apply_delta();
+
+        for(int i = 0;i< number_of_false_cases1; i++)
+        {
+            
+            int id = wrong_neighbors_ds_index[i];
+            fixpath(id, 1, type);
+        }
+        apply_delta(type);
     }
 
     void get_wrong_index_max(){
@@ -1848,11 +2224,9 @@ extern "C" {
         std::fill(wrong_rank_max, wrong_rank_max + num_Elements, 0);
         std::fill(wrong_rank_max_2, wrong_rank_max_2 + num_Elements, 0);
 
-        for(int i = 0; i<dec_saddleTriplets.size(); i++)
-        {
+        for(int i = 0; i<dec_saddleTriplets.size(); i++){
 
-            if(maximum[saddleTriplets[i][0]] != dec_maximum[dec_saddleTriplets[i][0]])
-            {
+            if(maximum[saddleTriplets[i][0]] != dec_maximum[dec_saddleTriplets[i][0]]){
                 
                 int maxId = maximum[saddleTriplets[i][0]];
                 if(wrong_rank_max[maxId] == 0)
@@ -1866,16 +2240,54 @@ extern "C" {
                 }
             }
 
-            if(maximum[saddleTriplets[i][saddleTriplets[i][44] - 1]] != dec_maximum[dec_saddleTriplets[i][dec_saddleTriplets[i][44] - 1]])
-            {
+            if(maximum[saddleTriplets[i][saddleTriplets[i][44] - 1]] != dec_maximum[dec_saddleTriplets[i][dec_saddleTriplets[i][44] - 1]]){
                 int maxId = maximum[saddleTriplets[i][saddleTriplets[i][44] - 1]];
-                if(wrong_rank_max_2[maxId] == 0)
-                {
+                if(wrong_rank_max_2[maxId] == 0){
                     wrong_rank_max_index_2[wrong_max_counter_2 * 2] = maximum[saddleTriplets[i][saddleTriplets[i][44] - 1]];
                     wrong_rank_max_index_2[wrong_max_counter_2 * 2 + 1] = dec_maximum[dec_saddleTriplets[i][dec_saddleTriplets[i][44] - 1]];
                     wrong_rank_max_2[maxId] = 1;
                     
                     wrong_max_counter_2 ++;
+                    
+                }
+            }
+            
+        }
+    }
+
+    void get_wrong_index_min(){
+        wrong_min_counter = 0;
+        wrong_min_counter_2 = 0;
+        std::fill(wrong_rank_min, wrong_rank_min + num_Elements, 0);
+        std::fill(wrong_rank_min_2, wrong_rank_min_2 + num_Elements, 0);
+
+        
+        for(int i = 0; i<dec_saddle1Triplets.size(); i++)
+        {
+            // find each saddle's distorted rechable largest minimum
+            
+            if(minimum[saddle1Triplets[i][0]] != dec_minimum[dec_saddle1Triplets[i][0]]){
+                
+                int minId = minimum[saddle1Triplets[i][0]];
+                if(wrong_rank_min_2[minId] == 0){
+                    wrong_rank_min_index_2[wrong_min_counter_2 * 2] = minimum[saddle1Triplets[i][0]];
+                    wrong_rank_min_index_2[wrong_min_counter_2 * 2 + 1] = dec_minimum[dec_saddle1Triplets[i][0]];
+                    wrong_rank_min_2[minId] = 1;
+                    
+                    wrong_min_counter_2 ++;
+                    
+                }
+            }
+
+            // find each saddle's distorted rechable smallest minimum
+            if(minimum[saddle1Triplets[i][saddle1Triplets[i][44] - 1]] != dec_minimum[dec_saddle1Triplets[i][dec_saddle1Triplets[i][44] - 1]]){
+                int minId = minimum[saddle1Triplets[i][saddle1Triplets[i][44] - 1]];
+                if(wrong_rank_min[minId] == 0){
+                    wrong_rank_min_index[wrong_min_counter * 2] = minimum[saddle1Triplets[i][saddle1Triplets[i][44] - 1]];
+                    wrong_rank_min_index[wrong_min_counter * 2 + 1] = dec_minimum[dec_saddle1Triplets[i][dec_saddle1Triplets[i][44] - 1]];
+                    wrong_rank_min[minId] = 1;
+
+                    wrong_min_counter ++;
                     
                 }
             }
@@ -1897,25 +2309,105 @@ extern "C" {
                     wrong_rank_saddle_index[wrong_saddle_counter * 2 + 1] = dec_saddles2[dec_largestSaddlesForMax[maxId]];
                     int i = maxId;
                     
-                    // std::cout<<saddles2[largestSaddlesForMax[i]]<<", " << dec_saddles2[dec_largestSaddlesForMax[i]]<<std::endl;
-                    // std::cout<<decp_data[saddles2[largestSaddlesForMax[i]]]-decp_data[dec_saddles2[dec_largestSaddlesForMax[i]]]<<std::endl;
-                    // std::cout<<input_data[saddles2[largestSaddlesForMax[i]]] - bound - (input_data[dec_saddles2[dec_largestSaddlesForMax[i]]] - bound)<<std::endl;
-                    
-                    
                     wrong_rank_saddle[maxId] = 1;
                     wrong_saddle_counter ++;
+                    std::cout<<wrong_rank_saddle<<std::endl;
                 }
             }
         }
 
     }
 
-    void fix_wrong_index_max(int true_index, int false_index, int direction = 0){
+    void get_wrong_index_saddles_join(){
+        wrong_saddle_counter_join = 0;
+
+        std::fill(wrong_rank_saddle_join, wrong_rank_saddle_join + num_Elements, 0);
+        
+        for (const auto& pair : dec_smallestSaddlesForMin) {
+            const int minId = pair.first;
+            if(dec_saddles1[pair.second] != saddles1[smallestSaddlesForMin[minId]]){
+                if(wrong_rank_saddle_join[minId] == 0){
+                    
+                    wrong_rank_saddle_join_index[wrong_saddle_counter_join * 2] = saddles1[smallestSaddlesForMin[minId]];
+                    wrong_rank_saddle_join_index[wrong_saddle_counter_join * 2 + 1] = dec_saddles1[dec_smallestSaddlesForMin[minId]];
+                    int i = minId;
+                    
+                    wrong_rank_saddle_join[minId] = 1;
+                    wrong_saddle_counter_join ++;
+                }
+            }
+        }
+
+    }
+
+    void fix_wrong_index_max(int true_index, int false_index, int direction = 0, std::string type = "split"){
         double tmp_delta;
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
-        if(direction == 0){
+
+        if(type == "split"){
+            if(direction == 0){
             
+                tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
+                double d = tmp_true_value - decp_data[true_index];
+            
+                double oldValue = d_deltaBuffer[true_index];
+                
+                if (d > oldValue) {
+                    swap(true_index, d);
+                }  
+            }
+
+            else if(direction == 1){
+                
+                tmp_false_value = (input_data[false_index] - bound + decp_data[false_index]) / 2.0;
+                double d = tmp_false_value - decp_data[false_index];
+            
+                double oldValue = d_deltaBuffer[false_index];
+                
+                if (d > oldValue) {
+                    swap(false_index, d);
+                } 
+            }
+        }
+
+        else{
+            if(direction == 0){
+            
+                tmp_false_value = (input_data[false_index] + bound + decp_data[false_index]) / 2.0;
+                double d = tmp_false_value - decp_data[false_index];
+            
+                double oldValue = d_deltaBuffer[false_index];
+                
+                if (d > oldValue) {
+                    swap(false_index, d);
+                }  
+            }
+
+            else if(direction == 1){
+                
+                tmp_true_value = (input_data[true_index] + bound + decp_data[true_index]) / 2.0;
+                double d = tmp_true_value - decp_data[true_index];
+            
+                double oldValue = d_deltaBuffer[true_index];
+                
+                if (d > oldValue) {
+                    swap(true_index, d);
+                } 
+            }
+        }
+
+        return;
+    }
+
+    void fix_wrong_index_min(int true_index, int false_index, int direction = 0, std::string type = "split"){
+        double tmp_delta;
+        double tmp_true_value = decp_data[true_index];
+        double tmp_false_value = decp_data[false_index];
+
+        
+        if(direction == 0){
+        
             tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
             double d = tmp_true_value - decp_data[true_index];
         
@@ -1938,31 +2430,38 @@ extern "C" {
             } 
         }
         
-        
-        
 
         return;
     }
 
-    void fix_wrong_index_saddle(int true_index, int false_index, int direction = 0){
+    void fix_wrong_index_saddle(int true_index, int false_index, int direction = 0, std::string type = "split"){
         double tmp_delta;
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
         if(tmp_true_value > tmp_false_value || (tmp_true_value == tmp_false_value && true_index > false_index)) return;
-        double d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
+        if(type == "split"){
+            double d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
+            double oldValue = d_deltaBuffer[false_index];
+            if (d > oldValue) {
+                swap(false_index, d);
+            }  
+        }
+
+        else{
+            
+            double d = (input_data[true_index] + bound + decp_data[true_index])/2.0 - decp_data[true_index];
+            double oldValue = d_deltaBuffer[true_index];
+            if (d > oldValue) {
+                swap(true_index, d);
+            }  
         
-        double oldValue = d_deltaBuffer[false_index];
-        
-        if (d > oldValue) {
-            swap(false_index, d);
-        }  
-        
+        }
         
 
         return;
     }
 
-    void s_loops(){
+    void s_loops(std::string type = "split"){
         get_wrong_index_max();
         init_delta();
 
@@ -1972,7 +2471,7 @@ extern "C" {
             int true_index = wrong_rank_max_index[i*2];
             int false_index = wrong_rank_max_index[i*2+1];
             
-            fix_wrong_index_max(true_index, false_index);
+            fix_wrong_index_max(true_index, false_index, 0, type);
         }
 
         for(int i = 0; i < wrong_max_counter_2; i++)
@@ -1981,27 +2480,65 @@ extern "C" {
             int true_index = wrong_rank_max_index_2[i*2];
             int false_index = wrong_rank_max_index_2[i*2+1];
             
-            fix_wrong_index_max(true_index, false_index, 1);
+            fix_wrong_index_max(true_index, false_index, 1, type);
         }
 
-        apply_delta();
+        apply_delta(type);
 
     }
 
-    void saddle_loops(){
+    void s_loops_join(std::string type = "split"){
+        get_wrong_index_min();
+        init_delta();
+        std::cout<<wrong_min_counter<<", "<<wrong_min_counter_2<<std::endl;
+        for(int i = 0; i < wrong_min_counter; i++){
+            
+            int true_index = wrong_rank_min_index[i*2];
+            int false_index = wrong_rank_min_index[i*2+1];
+            
+            fix_wrong_index_min(true_index, false_index, 0, type);
+        }
+
+        for(int i = 0; i < wrong_min_counter_2; i++){
+            
+            int true_index = wrong_rank_min_index_2[i*2];
+            int false_index = wrong_rank_min_index_2[i*2+1];
+            
+            fix_wrong_index_min(true_index, false_index, 1, type);
+        }
+
+        apply_delta(type);
+
+    }
+
+    void saddle_loops(std::string type = "split"){
         get_wrong_index_saddles();
         init_delta();
-
-        std::cout<<"saddle is:"<<wrong_saddle_counter<<std::endl;
+        // std::cout<<wrong_saddle_counter<<std::endl;
         for(int i = 0; i < wrong_saddle_counter; i++)
         {
             
             int true_index = wrong_rank_saddle_index[i*2];
             int false_index = wrong_rank_saddle_index[i*2+1];
             
-            fix_wrong_index_saddle(true_index, false_index, 1);
+            fix_wrong_index_saddle(true_index, false_index, 1, type);
         }
-        apply_delta();
+        apply_delta(type);
+    }
+
+    void saddle_loops_join(std::string type = "split"){
+        get_wrong_index_saddles_join();
+        init_delta();
+
+        for(int i = 0; i < wrong_saddle_counter_join; i++)
+        {
+            
+            int true_index = wrong_rank_saddle_index[i*2];
+            int false_index = wrong_rank_saddle_index[i*2+1];
+            
+            fix_wrong_index_saddle(true_index, false_index, 1, type);
+        }
+        apply_delta(type);
     }
 
     void saveArrayToBin(const double* arr, size_t size, const std::string& filename) {
@@ -2061,28 +2598,4 @@ extern "C" {
         std::cout<<std::endl;
         vec = sorted_vec;
     }
-
-    // std::unordered_map<std::pair<int, int>> ConvertToMap(std::vector<std::pair<int, int>>& vec, const std::vector<int>& temparray) {
-        
-    //     std::unordered_map<std::pair<int, int>> indices;
-    //     for (size_t i = 0; i < vec.size(); ++i) {
-    //         indices[temparray[i]] = ;
-    //     }
-
-    //     // 按 temparray 的值对 indices 排序
-    //     std::sort(indices.begin(), indices.end(), [&temparray](size_t i1, size_t i2) {
-    //         return temparray[i1] < temparray[i2];
-    //     });
-
-    //     // 按排序后的 indices 重排 vec
-    //     std::vector<std::pair<int, int>> sorted_vec(vec.size());
-    //     for (size_t i = 0; i < indices.size(); ++i) {
-    //         sorted_vec[i] = vec[indices[i]];
-    //     }
-    //     std::cout<<std::endl;
-    //     vec = sorted_vec;
-
-    //     return indices;
-    // }
-
 }
