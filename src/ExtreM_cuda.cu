@@ -121,7 +121,7 @@ struct OffsetComparator {
 };
 
 int initialValue = 0, num_Elements_host;
-__device__ double *d_deltaBuffer, *input_data, *decp_data, bound;
+__device__ double *d_deltaBuffer, *input_data, *decp_data, bound, thr;
 __device__ int count_f_max, count_f_min, count_f_saddle, 
                 width, height, depth, maxNeighbors, num_Elements, numFaces, num_false_cases, num_false_cases1;
 __device__ int *dec_vertex_type, *vertex_type, *vertex_cells, *dec_saddlerank, *saddlerank,
@@ -163,7 +163,7 @@ int directions_host[42] =
 
 size_t cmpSize = 0;
 std::string file_path;
-double maxValue, minValue, er, host_bound;
+double maxValue, minValue, er, host_bound, host_thre, host_sim;
 
 void getdata(const std::string &filename, double *input_data_host, double *decp_data_host, double *decp_data_copy, 
             const double er, double &bound, int data_size) {
@@ -216,6 +216,7 @@ void getdata(const std::string &filename, double *input_data_host, double *decp_
     
     double minValue = *std::min_element(h_buffer.begin(), h_buffer.end());
     double maxValue = *std::max_element(h_buffer.begin(), h_buffer.end());
+    host_thre = (maxValue - minValue) * host_sim;
     bound = (maxValue - minValue) * er;
     
     std::cout << "Data read, compressed, and decompressed successfully." << std::endl;
@@ -922,326 +923,7 @@ __device__ int binarySearchLUT(const int* keys, int numKeys, int target) {
     // return -1; // Not found
 }
 
-__global__ void classifyVertex_CUDA(int type = 0, int local = 1) {
-    // int i = blockIdx.x * blockDim.x + threadIdx.x;
-    // if (i >= num_Elements ) return;
-    // 
 
-    double* heightMap = input_data;
-    int* results = vertex_type;
-    int* lowerStars_t = lowerStars;
-    int* upperStars_t = upperStars;
-
-    if(type == 1){
-        heightMap = decp_data;
-        results = dec_vertex_type;
-        lowerStars_t = dec_lowerStars;
-        upperStars_t = dec_upperStars;
-    }
-
-    __shared__ double smem[TILE_SIZE + 2][TILE_SIZE + 2][TILE_SIZE + 2];
-
-    int tx = threadIdx.x + 1;  // 1-based index in shared memory (考虑Halo)
-    int ty = threadIdx.y + 1;
-    int tz = threadIdx.z + 1;
-
-    int gx = blockIdx.x * TILE_SIZE + threadIdx.x;
-    int gy = blockIdx.y * TILE_SIZE+ threadIdx.y;
-    int gz = blockIdx.z * TILE_SIZE + threadIdx.z;
-    
-    // // 读取当前 voxel
-    if (gx < width && gy < height && gz < depth) {
-        smem[tx][ty][tz] = heightMap[gz * width * height + gy * width + gx];
-    }
-
-    
-    if( threadIdx.x == 0 || threadIdx.x == TILE_SIZE - 1 ||
-        threadIdx.y == 0 || threadIdx.y == TILE_SIZE - 1  ||
-        threadIdx.z == 0 || threadIdx.z == TILE_SIZE - 1 ){
-        for (int i = 0; i < 14; i++) {
-            int dx = neighborOffsets[i][0];
-            int dy = neighborOffsets[i][1];
-            int dz = neighborOffsets[i][2];
-
-            int nx = gx + dx;
-            int ny = gy + dy;
-            int nz = gz + dz;
-
-            int ntx = tx + dx;
-            int nty = ty + dy;
-            int ntz = tz + dz;
-
-            // 只有 block 边界的线程负责加载 Halo Cells
-            if(nx >= 0 && nx < width && ny >= 0 && ny < height && nz >= 0 && nz <depth){
-                smem[ntx][nty][ntz] = heightMap[nz * height * width + ny * width + nx];
-            }
-        }
-    }
-
-
-    __syncthreads();  // 确保所有 shared memory 都加载完毕
-    
-    int g_idx = gz * width * height + gy * width + gx;
-    if(g_idx >= num_Elements) return;
-    if (!(gx < width && gy < height && gz < depth))  return;
-    if(updated_vertex[g_idx] != 0 && local == 1) return;
-
-    double currentHeight = smem[tx][ty][tz];
-    // double currentHeight = heightMap[g_idx];
-    int vertexId = g_idx;
-
-    int lowerCount = 0, upperCount = 0;
-    int lowerStar[MAX_NEIGHBORS] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    int upperStar[MAX_NEIGHBORS]= {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-
-    
-    int neighbor_size = 0;
-    int binary[14] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    int vertex_binary[14] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    for (int d = 0; d < maxNeighbors; d++) {
-        
-        int dirX = directions[d * 3];     
-        int dirY = directions[d * 3 + 1]; 
-        int dirZ = directions[d * 3 + 2]; 
-        int newX = gx + dirX;
-        int newY = gy + dirY;
-        int newZ = gz + dirZ;
-        int r = newX + newY * width + newZ* (height * width); // Calculate the index of the adjacent vertex
-        
-        if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
-    // for (int d = 0; d < maxNeighbors; d++) {
-    //     int r = adjacency[vertexId * maxNeighbors + d];
-    //     if (r == -1) break;
-        
-        // int nx = r % width;
-        // int ny = (r / width) % height;
-        // int nz = (r / (width * height)) % depth;
-            int smem_x = tx + (newX - gx);
-            int smem_y = ty + (newY - gy);
-            int smem_z = tz + (newZ - gz);
-            
-            // double neighbor_value = heightMap[r];
-            // if(smem_z * (BLOCK_SIZE * BLOCK_SIZE) + smem_y * BLOCK_SIZE + smem_x >= BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE){
-            //     printf("%d %d %d %d %d %d %d %d %d\n", nx, ny, nz, gx, gy, gz, smem_x, smem_y, smem_z);
-            // }
-            double neighbor_value = smem[smem_x][smem_y][smem_z];
-
-            if (neighbor_value < currentHeight || (neighbor_value == currentHeight && r < g_idx)) {
-                lowerStars_t[vertexId*(maxNeighbors+1) + lowerCount] = r;
-                binary[maxNeighbors - 1 - neighbor_size] = 0;
-                lowerStar[lowerCount] = r;
-                lowerCount++;
-                
-            } else if (neighbor_value > currentHeight || (neighbor_value == currentHeight && r > g_idx)) {
-                upperStars_t[vertexId*(maxNeighbors+1) + upperCount] = r;
-                upperStar[upperCount] = r;
-                binary[maxNeighbors - 1 - neighbor_size] = 1;
-                upperCount++;
-                
-            }
-            vertex_binary[13 - d] = 1;
-            neighbor_size++;
-        }
-    }
-
-    lowerStars_t[vertexId*(maxNeighbors+1) + maxNeighbors] = lowerCount;
-    upperStars_t[vertexId*(maxNeighbors+1) + maxNeighbors] = upperCount;
-    
-    int decimal_value = 0;
-    for (int i = 0; i < maxNeighbors; i++) {
-        decimal_value = (decimal_value << 1) | binary[i]; // 左移并加上当前位
-    }
-
-    int vertex_types = 0;
-    for (int i = 0; i < maxNeighbors; i++) {
-        vertex_types= (vertex_types << 1) | vertex_binary[i]; // 左移并加上当前位
-    }
-    int keyIndex = binarySearchLUT(keys, NUM_KEYS, vertex_types);
-    
-    int LUT_result = 5;
-    if(upperCount == 0) LUT_result = 4;
-    else if(lowerCount == 0) LUT_result = 0;
-    else if (keyIndex != -1) {
-        LUT_result = LUT_cuda[lutOffsets[keyIndex] + decimal_value];
-    } else {
-        LUT_result = -1; // 未找到
-    }
-    // else if(neighbor_size == 4) LUT_result = LUT_cuda[decimal_value];
-    // else if(neighbor_size == 6) LUT_result = LUT_cuda[(1<<4) + decimal_value];
-    // else if(neighbor_size == 7) LUT_result = LUT_cuda[(1<<4) + (1<<6) + decimal_value];
-    // else if(neighbor_size == 8) LUT_result = LUT_cuda[(1<<4) + (1<<6) + (1<<7) + decimal_value];
-    // else if(neighbor_size == 10) LUT_result = LUT_cuda[(1<<4) + (1<<6) +  (1<<7) + (1<<8) + decimal_value];
-    // else if(neighbor_size == 10) LUT_result = LUT_cuda[(1<<4) + (1<<6) +  (1<<7) + (1<<8) + (1<<10) + decimal_value];
-
-
-    
-    
-   
-    
-
-    
-    // int lowerParent[MAX_NEIGHBORS]= {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    // int upperParent[MAX_NEIGHBORS]= {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    
-    // int lowerRank[MAX_NEIGHBORS]= {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-    // int upperRank[MAX_NEIGHBORS]= {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-    // for (int j = 0; j < lowerCount; j++) {
-    //     lowerParent[j] = j;
-    //     lowerRank[j] = 0;
-    // }
-    // for (int j = 0; j < upperCount; j++){
-    //     upperParent[j] = j;
-    //     upperRank[j] = 0;
-    // }
-    // // 0.0009576000156812
-    // // 0.0011462080292404
-    // int x = vertexId % width;
-    // int y = (vertexId / width ) % height;
-    // int z = (vertexId / (width *  height)) % depth;
-    // for(int t = 0; t < 14; t++){
-    //     int dx = directions[ t * 3 + 0];
-    //     int dy = directions[ t * 3 + 1];
-    //     int dz = directions[ t * 3 + 2];
-
-    //     int nx = x + dx;
-    //     int ny = y + dy;
-    //     int nz = z + dz;
-    //     int v2 = nx + (ny + (nz) * height) * width;
-        
-    //     if(nx >= width || ny >= height || nz >= depth || nx < 0 ||
-    //         ny < 0 || nz < 0 || v2 >= num_Elements || v2 < 0) continue;
-
-    //     for(int j = 0; j < MAX_V3; j++){
-    //         int dx1 = lookupTable[t][j][0];
-    //         int dy1 = lookupTable[t][j][1];
-    //         int dz1 = lookupTable[t][j][2];
-    //         // int cellId = vertex_cells[i * 42 + t];
-    //         if(dx1 == -2 || dy1 == -2 || dz1 == -2) break;
-    //         int nx1 = x + dx1;
-    //         int ny1 = y + dy1;
-    //         int nz1 = z + dz1;
-    //         int v3 = nx1 + (ny1 + (nz1) * height) * width;
-    //         if(nx1 >= width || ny1 >= height || nz1 >= depth || nx1 < 0 ||
-    //             ny1 < 0 || nz1 < 0 || v3 >= num_Elements || v3 < 0 || v3 < v2) continue;
-    //         int vertices[3] = {vertexId, v2, v3};
-            
-    //         int smem_x = tx + (nx1 - gx);
-    //         int smem_y = ty + (ny1 - gy);
-    //         int smem_z = tz + (nz1 - gz);
-    //         double neighbor1_value = smem[smem_x][smem_y][smem_z];
-
-    //         smem_x = tx + (nx - gx);
-    //         smem_y = ty + (ny - gy);
-    //         smem_z = tz + (nz - gz);
-
-    //         double neighbor0_value = smem[smem_x][smem_y][smem_z];
-
-    //         // double neighbor0_value = heightMap[neighborId0];
-    //         bool const lower0 = neighbor0_value < currentHeight || (neighbor0_value == currentHeight and v2<vertexId);
-            
-    //         bool const lower1 = neighbor1_value < currentHeight || (neighbor1_value == currentHeight and v3<vertexId);
-    //         int *neighbors = lowerStar;
-    //         int *seeds = lowerParent;
-    //         int *rank = lowerRank;
-
-    //         if(!lower0) {
-    //             neighbors = upperStar;
-    //             seeds = upperParent;
-    //             rank = upperRank;
-    //         }
-
-    //         if(lower0 == lower1) {
-    //             // connect their union-find sets!
-    //             int lowerId0 = -1, lowerId1 = -1;
-    //             for(int l = 0; l < maxNeighbors; l++) {
-    //                 if(neighbors[l] == -1) break;
-    //                 if(neighbors[l] == v2) {
-    //                     lowerId0 = l;
-    //                 }
-    //                 if(neighbors[l] == v3) {
-    //                     lowerId1 = l;
-    //                 }
-    //             }
-    //             if((lowerId0 != -1) && (lowerId1 != -1)) {
-    //                 union_sets(seeds, rank,lowerId0, lowerId1);
-    //             }
-    //         }
-    //     }
-
-    // }
-
-
-    // int lowerComponentCount = 0;
-    // int upperComponentCount = 0;
-    // for (int j = 0; j < lowerCount; j++) {
-    //     if (find(lowerParent, j) == j) lowerComponentCount++;
-    // }
-    // for (int j = 0; j < upperCount; j++) {
-    //     if (find(upperParent, j) == j) upperComponentCount++;
-    // }
-
-    // int result = 5;  
-
-    // if (lowerComponentCount == 0 && upperComponentCount == 1) result = 0; 
-    // else if (lowerComponentCount == 1 && upperComponentCount == 0) result = 4; 
-    // else if (lowerComponentCount == 1 && upperComponentCount == 1) result = 5; 
-    // else if (lowerComponentCount > 1 && upperComponentCount > 1) result = 3; 
-    // else if (lowerComponentCount > 1) result = 1;
-    // else if (upperComponentCount > 1) result = 2;
-    
-    if(type==0){
-        results[g_idx] = LUT_result;
-        // if(result!=LUT_result){
-        //     printf("unmatched here !!!%d: %d %d %d %d %d\n", g_idx, result, LUT_result, neighbor_size, decimal_value, vertex_types);
-        //     for(auto i:binary) printf("%d ",i);
-        //     printf("\n");
-        //     for(auto i:vertex_binary) printf("%d ",i);
-        //     printf("\n");
-        //     for(auto i:upperStar) printf("%d ",i);
-        //     printf("\n");
-            
-        // }
-    }
-    else{
-        int ori_type = vertex_type[g_idx];
-        if(LUT_result != ori_type){
-            // maximum
-            if((LUT_result==4 and ori_type!=4) or (LUT_result!=4 and ori_type==4)){
-                int idx_fp_max = atomicAdd(&count_f_max, 1);
-                all_max[idx_fp_max] = g_idx;
-                
-            } 
-            if((LUT_result==0 and ori_type!=0) or (LUT_result!=0 and ori_type==0)){
-                int idx_fp_min = atomicAdd(&count_f_min, 1);
-                all_min[idx_fp_min] = g_idx;
-            }
-            if((LUT_result==2 and ori_type!=2) or (LUT_result!=2 and ori_type==2)){
-                int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
-                all_saddle[idx_fp_saddle] = g_idx;
-            }
-
-            if((LUT_result==1 and ori_type!=1) or (LUT_result!=1 and ori_type==1)){
-                int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
-                all_saddle[idx_fp_saddle] = g_idx;
-            }
-
-            if((LUT_result==3 and ori_type!=3) or (LUT_result!=3 and ori_type==3)){
-                int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
-                all_saddle[idx_fp_saddle] = g_idx;
-                }
-
-
-            }
-
-            else if(LUT_result==2 and ori_type==2 || LUT_result== 1 and ori_type==1 || LUT_result== 3 and ori_type==3){
-                    
-                if(areVectorsDifferent_local(g_idx, lowerStar, lowerCount)){
-                    int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
-                    all_saddle[idx_fp_saddle] = g_idx;
-                }
-            }
-    }
-}
 
 __global__ void cloops_kernel_CUDA(int type = 0, int local = 1) {
     // int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1988,7 +1670,7 @@ __global__ void init_max_saddle(int type=0){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i>=nMax) return;
     
-    // dec_reachable_saddle_for_Max[i*(nSaddle2+1) + nSaddle2] = 0;
+    dec_reachable_saddle_for_Max[i*45 + 44] = 0;
 
 }
 
@@ -1996,7 +1678,7 @@ __global__ void init_min_saddle(int type=0){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i>=nMin) return;
     
-    // dec_reachable_saddle_for_Min[i*(nSaddle1+1) + nSaddle1] = 0;
+    dec_reachable_saddle_for_Min[i*45 + 44] = 0;
 
 }
 
@@ -2095,8 +1777,16 @@ __device__ bool islarger(const int v, const int u, const double *offset){
     return offset[v] > offset[u] || (abs(offset[v] - offset[u]) == 0 && v > u);
 }
 
+__device__ bool islarger_shared(const int v, const int u, double value_v1, double value_v2){
+    return value_v1 > value_v2 || (value_v1 == value_v2 && v > u);
+}
+
 __device__ bool isless(const int v, const int u, const double* offset){
     return offset[v] < offset[u] || (std::abs(offset[v] - offset[u]) == 0 && v < u);
+}
+
+__device__ bool isless_shared(const int v, const int u, double value_v1, double value_v2){
+    return value_v1 < value_v2 || (value_v1 == value_v2 && v < u);
 }
 
 __device__ void insertionSort(int *arr, int n, double *offset){
@@ -2159,6 +1849,7 @@ __global__ void findAscPaths(int type = 0){
 
     if(type == 1){
         decp_data[saddles2[index]] = input_data[saddles2[index]] - bound;
+        delta_counter[saddles2[index]] = 7;
     }
     
     
@@ -2167,6 +1858,7 @@ __global__ void findAscPaths(int type = 0){
     int x = vertexId%width;
     int y = (vertexId/width) % height;
     int z = (vertexId / (width * height)) % depth;
+    double vertexValue = offset[vertexId];
     for(int j = 0; j< maxNeighbors; j++){
         int dirX = directions[j * 3];     
         int dirY = directions[j * 3 + 1]; 
@@ -2179,7 +1871,8 @@ __global__ void findAscPaths(int type = 0){
         if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
             // int neighbor_id = adjacency[maxNeighbors * i + j];
             // if(neighbor_id == -1) continue;
-            if(islarger(r, vertexId, offset)) {
+            int maxi = desManifold[r];
+            if(islarger(r, vertexId, offset) && abs(offset[maxi] - vertexValue) >= thr) {
                 temp_Saddle_tripplets[temp_Saddle_tripplets[44]] = desManifold[r];
                 temp_Saddle_tripplets[44]++;
             }
@@ -2207,8 +1900,8 @@ __global__ void findAscPaths(int type = 0){
     for(int i = 0; i < ItemSize; i++){
         saddleTriplets_t[index * 46 + i] = temp_Saddle_tripplets[i];
         // int max_index_t = max_index[temp_Saddle_tripplets[i]];
-        // int idx_fp = atomicAdd(&reachable_saddle_for_Max_t[max_index_t * (nSaddle2 + 1) + nSaddle2], 1);
-        // reachable_saddle_for_Max_t[max_index_t * (nSaddle2 + 1) + idx_fp] = saddles2[index];
+        // int idx_fp = atomicAdd(&reachable_saddle_for_Max_t[max_index_t * 45 + 44], 1);
+        // reachable_saddle_for_Max_t[max_index_t * 45 + idx_fp] = saddles2[index];
         // wrong_neighbors_index[idx_fp] = neighborId;
     }
     saddleTriplets_t[index * 46 + 44] = temp_Saddle_tripplets[44];
@@ -2259,6 +1952,7 @@ __global__ void findDescPaths(int type = 0){
 
     if(type == 1){
         decp_data[saddles1[index]] = input_data[saddles1[index]] - bound;
+        delta_counter[saddles1[index]] = 7;
     }
     
     temp_Saddle_tripplets[44] = 0;
@@ -2266,6 +1960,7 @@ __global__ void findDescPaths(int type = 0){
     int x = vertexId%width;
     int y = (vertexId/width) % height;
     int z = (vertexId / (width * height)) % depth;
+    double vertexValue = offset[vertexId];
     for(int j = 0; j< maxNeighbors; j++){
 
         int dirX = directions[j * 3];     
@@ -2277,8 +1972,8 @@ __global__ void findDescPaths(int type = 0){
         int r = newX + newY * width + newZ* (height * width); // Calculate the index of the adjacent vertex
         
         if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
-            
-            if(isless(r, vertexId, offset)) {
+            int mini = asManifold[r];
+            if(isless(r, vertexId, offset) && abs(offset[mini] - vertexValue) >= thr) {
                 temp_Saddle_tripplets[temp_Saddle_tripplets[44]] = asManifold[r];
                 temp_Saddle_tripplets[44]++;
             }
@@ -2306,8 +2001,8 @@ __global__ void findDescPaths(int type = 0){
     for(int i = 0; i < ItemSize; i++){
         saddle1Triplets_t[index * 46 + i] = temp_Saddle_tripplets[i];
         // int min_index_t = max_index[temp_Saddle_tripplets[i]];
-        // int idx_fp = atomicAdd(&reachable_saddle_for_Min_t[min_index_t * (nSaddle1 + 1) + nSaddle1], 1);
-        // reachable_saddle_for_Min_t[min_index_t * (nSaddle1 + 1) + idx_fp] = saddles1[index];
+        // int idx_fp = atomicAdd(&reachable_saddle_for_Min_t[min_index_t * 45 + 44], 1);
+        // reachable_saddle_for_Min_t[min_index_t * 45 + idx_fp] = saddles1[index];
         // wrong_neighbors_index[idx_fp] = neighborId;
     }
     saddle1Triplets_t[index * 46 + 44] = temp_Saddle_tripplets[44];
@@ -2364,10 +2059,10 @@ __global__ void computelargestSaddlesForMax(int type = 0){
 
     // int largest = -1;
     // int max_index_t = max_index[maxId];
-    // int number_of_saddle = reachable_saddle_for_Max_t[max_index_t * (nSaddle2 + 1) + nSaddle2] ;
+    // int number_of_saddle = reachable_saddle_for_Max_t[max_index_t * 45 + 44] ;
     // for(int i = 0; i<number_of_saddle; i++){
         
-    //     int reachable_saddle = reachable_saddle_for_Max_t[max_index_t * (nSaddle2 + 1) + i];
+    //     int reachable_saddle = reachable_saddle_for_Max_t[max_index_t * 45 + i];
     //     if(vertex_type[reachable_saddle] == 2 || vertex_type[reachable_saddle] == 3){
     //         if(largest == -1) largest = reachable_saddle;
     //         else if(isless(largest, reachable_saddle,  offset)) largest = reachable_saddle;
@@ -2376,7 +2071,7 @@ __global__ void computelargestSaddlesForMax(int type = 0){
 
     // if(largest != -1){
     //     // printf("wrong here %d %d %d\n", index, largest, largestSaddlesForMax_t[index] );
-    //     largestSaddlesForMax_t[index] = -1;
+    //     largestSaddlesForMax_t[index] = largest;
     // }
 }
 
@@ -2402,44 +2097,44 @@ __global__ void computesmallestSaddlesForMin(int type = 0){
     smallestSaddlesForMin_t[index] = -1;
     int globalMin = nMin - 1;
     int minId = minimum[index];
-    for(int i = 0; i < nSaddle1; i++) {
-        // auto &triplet = saddleTriplets[i];
-        int saddle = saddles1[i];
-        int temp;
-        for(int p = 0; p < saddle1Triplets_t[i * 46 + 44]; p++) {
+    // for(int i = 0; i < nSaddle1; i++) {
+    //     // auto &triplet = saddleTriplets[i];
+    //     int saddle = saddles1[i];
+    //     int temp;
+    //     for(int p = 0; p < saddle1Triplets_t[i * 46 + 44]; p++) {
             
-            const auto &min_v = saddle1Triplets_t[i * 46 + p];
-            if(min_v != minId) continue;
+    //         const auto &min_v = saddle1Triplets_t[i * 46 + p];
+    //         if(min_v != minId) continue;
 
-            if(smallestSaddlesForMin_t[index] == -1){
-                smallestSaddlesForMin_t[index] = saddle;
-                continue;
-            }
-            if(min_v != globalMin) {
-                temp = smallestSaddlesForMin_t[index];
-                if(isless(saddle, temp, offset)) {
-                    smallestSaddlesForMin_t[index] = saddle;
-                }
-            }
-        }
-    }
-
-    // int smallest = -1;
-    // int min_index_t = max_index[minId];
-    // int number_of_saddle = reachable_saddle_for_Min_t[min_index_t * (nSaddle1 + 1) + nSaddle1] ;
-    // for(int i = 0; i<number_of_saddle; i++){
-        
-    //     int reachable_saddle = reachable_saddle_for_Min_t[min_index_t * (nSaddle1 + 1) + i];
-    //     if(vertex_type[reachable_saddle] == 1 || vertex_type[reachable_saddle] == 3){
-    //         if(smallest == -1) smallest = reachable_saddle;
-    //         else if(islarger(smallest, reachable_saddle,  offset)) smallest = reachable_saddle;
+    //         if(smallestSaddlesForMin_t[index] == -1){
+    //             smallestSaddlesForMin_t[index] = saddle;
+    //             continue;
+    //         }
+    //         if(min_v != globalMin) {
+    //             temp = smallestSaddlesForMin_t[index];
+    //             if(isless(saddle, temp, offset)) {
+    //                 smallestSaddlesForMin_t[index] = saddle;
+    //             }
+    //         }
     //     }
     // }
 
-    // if(smallest != -1){
-    //     // printf("wrong here %d %d %d\n", index, smallest, smallestSaddlesForMin_t[index] );
-    //     smallestSaddlesForMin_t[index] = smallest;
-    // }
+    int smallest = -1;
+    int min_index_t = max_index[minId];
+    int number_of_saddle = reachable_saddle_for_Min_t[min_index_t * 45 + 44] ;
+    for(int i = 0; i<number_of_saddle; i++){
+        
+        int reachable_saddle = reachable_saddle_for_Min_t[min_index_t * 45 + i];
+        if(vertex_type[reachable_saddle] == 1 || vertex_type[reachable_saddle] == 3){
+            if(smallest == -1) smallest = reachable_saddle;
+            else if(islarger(smallest, reachable_saddle,  offset)) smallest = reachable_saddle;
+        }
+    }
+
+    if(smallest != -1){
+        // printf("wrong here %d %d %d\n", index, smallest, smallestSaddlesForMin_t[index] );
+        smallestSaddlesForMin_t[index] = smallest;
+    }
 }
 
 __device__ int computeMaxLabel(int i, const double *offset){
@@ -2548,6 +2243,7 @@ __global__ void get_wrong_split_neighbors(){
     int x = saddle%width;
     int y = (saddle/width) % height;
     int z = (saddle/ (width * height)) % depth;
+    double vertexValue = decp_data[saddle];
     for(int j = 0; j< maxNeighbors; j++){
         int dirX = directions[j * 3];     
         int dirY = directions[j * 3 + 1]; 
@@ -2560,10 +2256,9 @@ __global__ void get_wrong_split_neighbors(){
         if (newX >= 0 && newX < width && newY >= 0 && newY < height && neighborId >= 0 && neighborId < width*height*depth && newZ<depth && newZ>=0) {
             // int neighbor_id = adjacency[maxNeighbors * i + j];
             // if(neighbor_id == -1) continue;
+            int l = dec_DS_M[neighborId];
+            // if(islarger(neighborId, saddle, decp_data) && abs(decp_data[l] - vertexValue) >= thr){
             if(islarger(neighborId, saddle, decp_data)){
-            
-                int l = dec_DS_M[neighborId];
-                
                 if(l!= DS_M[neighborId]){
                     if(wrong_neighbors[neighborId] == 0){
                         int idx_fp = atomicAdd(&num_false_cases, 1);
@@ -2606,6 +2301,7 @@ __global__ void get_wrong_join_neighbors(){
     int x = saddle%width;
     int y = (saddle/width) % height;
     int z = (saddle / (width * height)) % depth;
+    double vertexValue = decp_data[saddle];
     for(int j = 0; j< maxNeighbors; j++){
         int dirX = directions[j * 3];     
         int dirY = directions[j * 3 + 1]; 
@@ -2616,9 +2312,10 @@ __global__ void get_wrong_join_neighbors(){
         int neighborId = newX + newY * width + newZ* (height * width); // Calculate the index of the adjacent vertex
         
         if (newX >= 0 && newX < width && newY >= 0 && newY < height && neighborId >= 0 && neighborId < width*height*depth && newZ<depth && newZ>=0) {
+            int l = dec_AS_M[neighborId];
+            // if(isless(neighborId, saddle, decp_data) && abs(decp_data[l] - vertexValue) >= thr){
             if(isless(neighborId, saddle, decp_data)){
-            
-                int l = dec_AS_M[neighborId];
+                
                 if(l!=AS_M[neighborId]){
                     if(wrong_neighbors_ds[neighborId] == 0){
                         int idx_fp = atomicAdd(&num_false_cases1, 1);
@@ -2710,7 +2407,7 @@ __global__ void init_delta() {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if(tid<num_Elements){
         d_deltaBuffer[tid] = -4.0 * bound;
-        delta_counter[tid] = 1;
+        // delta_counter[tid] = 1;
         updated_vertex[tid] = -1;
     }
 
@@ -2821,8 +2518,7 @@ __device__ int swap1(int index, double diff)
     
 }
 
-__device__ int swap(int index, double diff)
-{
+__device__ int swap(int index, double diff){
     
     double old_value = d_deltaBuffer[index];
     if ( diff > old_value) {                    
@@ -2846,6 +2542,30 @@ __device__ int findDifferences(const int* vec1, int size1,
         // 遍历 `vec1`，检查 `val` 是否存在
         for (int j = 0; j < size1; j++) {
             if (vec1[index * (maxNeighbors + 1) + j] == val) {
+                found = true;
+                break;
+            }
+        }
+
+        // 如果 `val` 不在 `vec1`，则存入 `differences`
+        if (!found) {
+            differences[count++] = val;
+            
+        }
+    }
+    return count; // 返回 `differences` 数组的大小
+}
+
+__device__ int findDifferences_local(const int* vec1, int size1, const int* vec2, int size2, int* differences) {
+    int count = 0;
+    
+    for (int i = 0; i < size2; i++) {
+        int val = vec2[i];
+        bool found = false;
+
+        // 遍历 `vec1`，检查 `val` 是否存在
+        for (int j = 0; j < size1; j++) {
+            if (vec1[j] == val) {
                 found = true;
                 break;
             }
@@ -2903,6 +2623,76 @@ __device__ void fix_saddle(int i){
     return;
 }
 
+__device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
+    
+    
+    double delta;
+    
+    // if(areVectorsDifferent(i, 0)){
+
+    int lowerCount = 0, upperCount = 0;
+    int lowerStar[MAX_NEIGHBORS] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+   
+
+    int gx = i % width;
+    int gy = (i/width) % height;
+    int gz = (i/(width*height)) % depth;
+    int neighbor_size = 0;
+    double currentHeight = decp_data[i];
+    for (int d = 0; d < maxNeighbors; d++) {
+        
+        int dirX = directions[d * 3];     
+        int dirY = directions[d * 3 + 1]; 
+        int dirZ = directions[d * 3 + 2]; 
+        int newX = gx + dirX;
+        int newY = gy + dirY;
+        int newZ = gz + dirZ;
+        int r = newX + newY * width + newZ* (height * width); // Calculate the index of the adjacent vertex
+        
+        if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
+            
+            
+            double neighbor_value = decp_data[r];
+
+            if (neighbor_value < currentHeight || (neighbor_value == currentHeight && r < i)) {
+                
+                lowerStar[lowerCount] = r;
+                lowerCount++;
+                
+            } 
+        }
+    }
+    int diff[MAX_NEIGHBORS];
+    
+    
+    int count = findDifferences_local(lowerStar, lowerCount, o_lowerStar_start, o_size1, diff);
+    
+    for(int index = 0; index<count; index++){
+        const int id = diff[index];
+        delta = (input_data[id]-bound) - decp_data[id];
+        double oldValue = d_deltaBuffer[id];
+        
+        if (delta > oldValue) {
+            swap(id, delta);
+        }  
+
+    }
+    
+    int diff1[MAX_NEIGHBORS];
+    
+    count = findDifferences_local(o_lowerStar_start, o_size1, lowerStar, lowerCount, diff1);
+    if(count > 0){
+        delta = (input_data[i]-bound) - decp_data[i];
+        double oldValue = d_deltaBuffer[i];
+        if (delta > oldValue) {
+            swap(i, delta);
+        } 
+    }
+    
+    // }
+    return;
+}
+
 __global__ void c_loop(int direction = 0){      
     // preservation of split tree?->decrease f
     
@@ -2917,9 +2707,11 @@ __global__ void c_loop(int direction = 0){
         int x = index % width;
         int y = (index / width) % height;
         int z = (index / (width * height)) % depth;
+        double input_value = input_data[index];
+        double decp_value = decp_data[index];
         if (vertex_type[index]!=4){
             
-            double d = ((input_data[index] - bound) + decp_data[index]) / 2.0 - decp_data[index];
+            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             
             if (d > oldValue) {
@@ -2933,7 +2725,7 @@ __global__ void c_loop(int direction = 0){
             
             // if is a maximum in the original data;
             int largest_index = index;
-            
+            double largest_value = decp_data[largest_index];
             for(int i = 0; i< maxNeighbors;i++){
                 int dx = directions[3 * i];
                 int dy = directions[3 * i + 1];
@@ -2947,17 +2739,19 @@ __global__ void c_loop(int direction = 0){
                 
                 // neighbor = adjacency[maxNeighbors * index + i];
                 // if(neighbor == -1) continue;
-                if(islarger(neighbor, largest_index, decp_data))
+                double neighbor_value = decp_data[neighbor];
+                if(islarger_shared(neighbor, largest_index, neighbor_value, largest_value))
                 {
                     largest_index = neighbor;
+                    largest_value = decp_data[largest_index];
                 }
             }
             
-            if(decp_data[index]>decp_data[largest_index] or(decp_data[index]==decp_data[largest_index] and index>largest_index)){
+            if(decp_value>largest_value or(decp_value==largest_value and index>largest_index)){
                 return;
             }
 
-            double d = ((input_data[largest_index] - bound) + decp_data[largest_index]) / 2.0 - decp_data[largest_index];
+            double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
             
             double oldValue = d_deltaBuffer[largest_index];
             if (d > oldValue) {
@@ -2977,8 +2771,11 @@ __global__ void c_loop(int direction = 0){
         int x = index % width;
         int y = (index / width) % height;
         int z = (index / (width * height)) % depth;
+        double input_value = input_data[index];
+        double decp_value = decp_data[index];
         if (vertex_type[index]!=0){
             int smallest_index = index;
+            double smallest_value = input_data[smallest_index];
             for(int i = 0; i< maxNeighbors;i++){
                 int dx = directions[3 * i];
                 int dy = directions[3 * i + 1];
@@ -2992,8 +2789,10 @@ __global__ void c_loop(int direction = 0){
                 
                 // neighbor = adjacency[maxNeighbors * index + i];
                 // if(neighbor == -1) continue;
-                if(isless(neighbor, smallest_index, input_data)){
+                double neighbor_value = input_data[neighbor];
+                if(isless_shared(neighbor, smallest_index, neighbor_value, smallest_value)){
                     smallest_index = neighbor;
+                    smallest_value = input_data[smallest_index];
                 }
             }
             // for(int i = 0; i<maxNeighbors;i++){
@@ -3004,8 +2803,9 @@ __global__ void c_loop(int direction = 0){
             //         smallest_index = neighbor;
             //     }
             // }
-            double d = ((input_data[smallest_index] - bound) + decp_data[smallest_index]) / 2.0 - decp_data[smallest_index];
-            if(decp_data[index]>decp_data[smallest_index] or (decp_data[index]==decp_data[smallest_index] and index>smallest_index)){
+            double decp_smallest_value = decp_data[smallest_index];
+            double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            if(decp_value>decp_smallest_value or (decp_value==decp_smallest_value and index>smallest_index)){
                 return;
             }
             double oldValue = d_deltaBuffer[smallest_index];
@@ -3017,7 +2817,7 @@ __global__ void c_loop(int direction = 0){
         }
     
         else{
-            double d = ((input_data[index] - bound) + decp_data[index]) / 2.0 - decp_data[index];
+            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             if (d > oldValue) {
                 swap(index, d);
@@ -3033,12 +2833,18 @@ __global__ void c_loop(int direction = 0){
         if(i>=count_f_saddle) return;
         
         int index = all_saddle[i];
-        fix_saddle(index);
+        // fix_saddle(index);
+        fix_saddle_local(index, lowerStars+index*(maxNeighbors + 1), lowerStars[index*(maxNeighbors + 1) +maxNeighbors]);
+        // fix_saddle_local(int i, int *lowerStar_start, int size1, int *o_lowerStar_start, int o_size1)
     }
 
     
     return;
 }
+
+
+
+
 
 __global__ void applyDeltaBuffer() {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3046,12 +2852,12 @@ __global__ void applyDeltaBuffer() {
     if (tid < num_Elements) {
         
         if(d_deltaBuffer[tid]!=-4.0 * bound){
-            if(abs(d_deltaBuffer[tid])>1e-15 && delta_counter[tid]<5 && abs(input_data[tid]-(decp_data[tid] + d_deltaBuffer[tid])) <= bound){
+            if(abs(d_deltaBuffer[tid])>1e-15 && delta_counter[tid]<6 && abs(input_data[tid]-(decp_data[tid] + d_deltaBuffer[tid])) <= bound){
                 decp_data[tid] += d_deltaBuffer[tid]; 
                 delta_counter[tid]+=1;
             }
             else{
-                delta_counter[tid] = 6;
+                delta_counter[tid] = 7;
                 decp_data[tid] = input_data[tid] - bound;
             }
             int x = tid % width;
@@ -3086,7 +2892,7 @@ __global__ void applyDeltaBuffer() {
 
 __global__ void get_wrong_index_max(){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i>=nSaddle2) return;
+    if(i>=nSaddle2 ||saddleTriplets[i*46 + 44] == 0) return;
     
     if(saddleTriplets[i*46] != dec_saddleTriplets[i*46]){
         
@@ -3101,29 +2907,28 @@ __global__ void get_wrong_index_max(){
     }
     int numberOfMax = saddleTriplets[i * 46 + 44] - 1;
 
-    if(saddleTriplets[i * 46 + numberOfMax] != dec_saddleTriplets[i * 46 + numberOfMax]){
-        int maxId = saddleTriplets[i * 46 + numberOfMax];
-        if(wrong_rank_max_2[maxId] == 0){
-            int pos = atomicAdd(&wrong_max_counter_2, 1);
-            wrong_rank_max_index_2[pos * 2] = saddleTriplets[i * 46 + numberOfMax];
-            wrong_rank_max_index_2[pos * 2 + 1] = dec_saddleTriplets[i * 46 + numberOfMax];
-            wrong_rank_max_2[maxId] = 1;
+    // if(saddleTriplets[i * 46 + numberOfMax] != dec_saddleTriplets[i * 46 + numberOfMax]){
+    //     int maxId = saddleTriplets[i * 46 + numberOfMax];
+    //     if(wrong_rank_max_2[maxId] == 0){
+    //         int pos = atomicAdd(&wrong_max_counter_2, 1);
+    //         wrong_rank_max_index_2[pos * 2] = saddleTriplets[i * 46 + numberOfMax];
+    //         wrong_rank_max_index_2[pos * 2 + 1] = dec_saddleTriplets[i * 46 + numberOfMax];
+    //         wrong_rank_max_2[maxId] = 1;
             
             
-        }
-    }
+    //     }
+    // }
         
     
 }
 
 __global__ void get_wrong_index_min(){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i>=nSaddle1) return;
+    if(i>=nSaddle1 || saddle1Triplets[i*46 + 44] == 0) return;
     if(saddle1Triplets[i*46] != dec_saddle1Triplets[i*46]){
         
         int minId = saddle1Triplets[i*46];
-        if(wrong_rank_min[minId] == 0)
-        {
+        if(wrong_rank_min[minId] == 0){
             int pos = atomicAdd(&wrong_min_counter, 1);
             wrong_rank_min_index[pos * 2] = saddle1Triplets[i*46];
             wrong_rank_min_index[pos * 2 + 1] = dec_saddle1Triplets[i*46];
@@ -3132,17 +2937,17 @@ __global__ void get_wrong_index_min(){
         }
     }
     int numberOfmin = saddle1Triplets[i * 46 + 44] - 1;
-
-    if(saddle1Triplets[i * 46 + numberOfmin] != dec_saddle1Triplets[i * 46 + numberOfmin]){
-        int minId = saddle1Triplets[i * 46 + numberOfmin];
-        if(wrong_rank_min_2[minId] == 0){
+    int dec_numberOfmin = dec_saddle1Triplets[i * 46 + 44] - 1;
+    // if(saddle1Triplets[i * 46 + numberOfmin] != dec_saddle1Triplets[i * 46 + dec_numberOfmin]){
+    //     int minId = saddle1Triplets[i * 46 + numberOfmin];
+    //     if(wrong_rank_min_2[minId] == 0){
             
-            int pos = atomicAdd(&wrong_min_counter_2, 1);
-            wrong_rank_min_index_2[pos * 2] = saddle1Triplets[i * 46 + numberOfmin];
-            wrong_rank_min_index_2[pos * 2 + 1] = dec_saddle1Triplets[i * 46 + numberOfmin];
-            wrong_rank_min_2[minId] = 1;
-        }
-    }
+    //         int pos = atomicAdd(&wrong_min_counter_2, 1);
+    //         wrong_rank_min_index_2[pos * 2] = saddle1Triplets[i * 46 + numberOfmin];
+    //         wrong_rank_min_index_2[pos * 2 + 1] = dec_saddle1Triplets[i * 46 + dec_numberOfmin];
+    //         wrong_rank_min_2[minId] = 1;
+    //     }
+    // }
         
     
 }
@@ -3259,12 +3064,14 @@ __global__ void fix_wrong_index_max(int direction = 0){
     else if(direction == 1){
         int true_index = wrong_rank_max_index_2[i*2];
         int false_index = wrong_rank_max_index_2[i*2+1];
+        // if not simplified
         double tmp_delta;
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
+        
         tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
         double d = tmp_true_value - decp_data[true_index];
-    
+        
         double oldValue = d_deltaBuffer[true_index];
         
         if (d > oldValue) {
@@ -3306,7 +3113,7 @@ __global__ void fix_wrong_index_min(int direction = 0){
         double tmp_false_value = decp_data[false_index];
         tmp_false_value = (input_data[false_index] - bound + decp_data[false_index]) / 2.0;
         double d = tmp_false_value - decp_data[false_index];
-    
+        printf("%d %d %.17f\n", false_index, true_index, d);
         double oldValue = d_deltaBuffer[false_index];
         
         if (d > oldValue) {
@@ -3473,6 +3280,347 @@ void saveArrayToBin(const double* arr, size_t size, const std::string& filename)
     outFile.close();
 }
 
+__device__ void c_loop_local(int index, int direction = 0){      
+    // preservation of split tree?->decrease f
+    
+    if (direction == 0){
+        
+        // if vertex is a regular point.
+        int x = index % width;
+        int y = (index / width) % height;
+        int z = (index / (width * height)) % depth;
+        double input_value = input_data[index];
+        double decp_value = decp_data[index];
+        if (vertex_type[index]!=4){
+            
+            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            double oldValue = d_deltaBuffer[index];
+            
+            if (d > oldValue) {
+                swap(index, d);
+            }  
+
+            return;
+        
+        }
+        else{
+            
+            // if is a maximum in the original data;
+            int largest_index = index;
+            double largest_value = decp_data[largest_index];
+            for(int i = 0; i< maxNeighbors;i++){
+                int dx = directions[3 * i];
+                int dy = directions[3 * i + 1];
+                int dz = directions[3 * i + 2];
+
+                int nx = x + dx;
+                int ny = y + dy;
+                int nz = z + dz;
+                int neighbor = x + dx + (y + dy + (z + dz) * height) * width;
+                if(nx < 0 || nx >= width || ny < 0 || ny >= height || nz < 0 || nz >= depth || neighbor < 0 || neighbor >= num_Elements) continue;
+                
+                // neighbor = adjacency[maxNeighbors * index + i];
+                // if(neighbor == -1) continue;
+                double neighbor_value = decp_data[neighbor];
+                if(islarger_shared(neighbor, largest_index, neighbor_value, largest_value))
+                {
+                    largest_index = neighbor;
+                    largest_value = decp_data[largest_index];
+                }
+            }
+            
+            if(decp_value>largest_value or(decp_value==largest_value and index>largest_index)){
+                return;
+            }
+
+            double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
+            
+            double oldValue = d_deltaBuffer[largest_index];
+            if (d > oldValue) {
+                swap(largest_index, d);
+            }  
+
+            return;
+        }
+    }
+    
+    
+    else if (direction == 1){
+        int x = index % width;
+        int y = (index / width) % height;
+        int z = (index / (width * height)) % depth;
+        double input_value = input_data[index];
+        double decp_value = decp_data[index];
+        if (vertex_type[index]!=0){
+            int smallest_index = index;
+            double smallest_value = input_data[smallest_index];
+            for(int i = 0; i< maxNeighbors;i++){
+                int dx = directions[3 * i];
+                int dy = directions[3 * i + 1];
+                int dz = directions[3 * i + 2];
+
+                int nx = x + dx;
+                int ny = y + dy;
+                int nz = z + dz;
+                int neighbor = x + dx + (y + dy + (z + dz) * height) * width;
+                if(nx < 0 || nx >= width || ny < 0 || ny >= height || nz < 0 || nz >= depth || neighbor<0 || neighbor >= num_Elements) continue;
+                
+                // neighbor = adjacency[maxNeighbors * index + i];
+                // if(neighbor == -1) continue;
+                double neighbor_value = input_data[neighbor];
+                if(isless_shared(neighbor, smallest_index, neighbor_value, smallest_value)){
+                    smallest_index = neighbor;
+                    smallest_value = input_data[smallest_index];
+                }
+            }
+            // for(int i = 0; i<maxNeighbors;i++){
+            //     int neighbor = adjacency[maxNeighbors * index + i];
+            //     if(neighbor == -1) continue;
+            //     if(isless(neighbor, smallest_index, input_data))
+            //     {
+            //         smallest_index = neighbor;
+            //     }
+            // }
+            double decp_smallest_value = decp_data[smallest_index];
+            double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            if(decp_value>decp_smallest_value or (decp_value==decp_smallest_value and index>smallest_index)){
+                return;
+            }
+            double oldValue = d_deltaBuffer[smallest_index];
+            if (d > oldValue) {
+                swap(smallest_index, d);
+            }  
+            return;
+        
+        }
+    
+        else{
+            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            double oldValue = d_deltaBuffer[index];
+            if (d > oldValue) {
+                swap(index, d);
+            } 
+            return;
+        }
+    }   
+
+    else{
+        fix_saddle(index);
+    }
+
+    
+    return;
+}
+
+__global__ void classifyVertex_CUDA(int type = 0, int local = 1) {
+    // int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // if (i >= num_Elements ) return;
+    // 
+
+    double* heightMap = input_data;
+    int* results = vertex_type;
+    int* lowerStars_t = lowerStars;
+    int* upperStars_t = upperStars;
+
+    if(type == 1){
+        heightMap = decp_data;
+        results = dec_vertex_type;
+        lowerStars_t = dec_lowerStars;
+        upperStars_t = dec_upperStars;
+    }
+
+    __shared__ double smem[TILE_SIZE + 2][TILE_SIZE + 2][TILE_SIZE + 2];
+
+    int tx = threadIdx.x + 1;  // 1-based index in shared memory (考虑Halo)
+    int ty = threadIdx.y + 1;
+    int tz = threadIdx.z + 1;
+
+    int gx = blockIdx.x * TILE_SIZE + threadIdx.x;
+    int gy = blockIdx.y * TILE_SIZE+ threadIdx.y;
+    int gz = blockIdx.z * TILE_SIZE + threadIdx.z;
+    
+    // // 读取当前 voxel
+    if (gx < width && gy < height && gz < depth) {
+        smem[tx][ty][tz] = heightMap[gz * width * height + gy * width + gx];
+    }
+
+    
+    if( threadIdx.x == 0 || threadIdx.x == TILE_SIZE - 1 ||
+        threadIdx.y == 0 || threadIdx.y == TILE_SIZE - 1  ||
+        threadIdx.z == 0 || threadIdx.z == TILE_SIZE - 1 ){
+        for (int i = 0; i < 14; i++) {
+            int dx = neighborOffsets[i][0];
+            int dy = neighborOffsets[i][1];
+            int dz = neighborOffsets[i][2];
+
+            int nx = gx + dx;
+            int ny = gy + dy;
+            int nz = gz + dz;
+
+            int ntx = tx + dx;
+            int nty = ty + dy;
+            int ntz = tz + dz;
+
+            // 只有 block 边界的线程负责加载 Halo Cells
+            if(nx >= 0 && nx < width && ny >= 0 && ny < height && nz >= 0 && nz <depth){
+                smem[ntx][nty][ntz] = heightMap[nz * height * width + ny * width + nx];
+            }
+        }
+    }
+
+
+    __syncthreads();  // 确保所有 shared memory 都加载完毕
+    
+    int g_idx = gz * width * height + gy * width + gx;
+    if(g_idx >= num_Elements) return;
+    if (!(gx < width && gy < height && gz < depth))  return;
+    if(updated_vertex[g_idx] != 0 && local == 1) return;
+
+    double currentHeight = smem[tx][ty][tz];
+    // double currentHeight = heightMap[g_idx];
+    int vertexId = g_idx;
+
+    int lowerCount = 0, upperCount = 0;
+    int lowerStar[MAX_NEIGHBORS] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    int upperStar[MAX_NEIGHBORS]= {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+
+    
+    int neighbor_size = 0;
+    int binary[14] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int vertex_binary[14] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    for (int d = 0; d < maxNeighbors; d++) {
+        
+        int dirX = directions[d * 3];     
+        int dirY = directions[d * 3 + 1]; 
+        int dirZ = directions[d * 3 + 2]; 
+        int newX = gx + dirX;
+        int newY = gy + dirY;
+        int newZ = gz + dirZ;
+        int r = newX + newY * width + newZ* (height * width); // Calculate the index of the adjacent vertex
+        
+        if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
+    
+            int smem_x = tx + (newX - gx);
+            int smem_y = ty + (newY - gy);
+            int smem_z = tz + (newZ - gz);
+            
+            
+            double neighbor_value = smem[smem_x][smem_y][smem_z];
+
+            if (neighbor_value < currentHeight || (neighbor_value == currentHeight && r < g_idx)) {
+                if(type==0) lowerStars_t[vertexId*(maxNeighbors+1) + lowerCount] = r;
+                binary[maxNeighbors - 1 - neighbor_size] = 0;
+                lowerStar[lowerCount] = r;
+                lowerCount++;
+                
+            } else if (neighbor_value > currentHeight || (neighbor_value == currentHeight && r > g_idx)) {
+                if(type==0) upperStars_t[vertexId*(maxNeighbors+1) + upperCount] = r;
+                upperStar[upperCount] = r;
+                binary[maxNeighbors - 1 - neighbor_size] = 1;
+                upperCount++;
+                
+            }
+            vertex_binary[13 - d] = 1;
+            neighbor_size++;
+        }
+    }
+
+    if(type==0) lowerStars_t[vertexId*(maxNeighbors+1) + maxNeighbors] = lowerCount;
+    if(type==0) upperStars_t[vertexId*(maxNeighbors+1) + maxNeighbors] = upperCount;
+    
+    int decimal_value = 0;
+    for (int i = 0; i < maxNeighbors; i++) {
+        decimal_value = (decimal_value << 1) | binary[i]; // 左移并加上当前位
+    }
+
+    int vertex_types = 0;
+    for (int i = 0; i < maxNeighbors; i++) {
+        vertex_types= (vertex_types << 1) | vertex_binary[i]; // 左移并加上当前位
+    }
+    int keyIndex = binarySearchLUT(keys, NUM_KEYS, vertex_types);
+    
+    int LUT_result = 5;
+    if(upperCount == 0) LUT_result = 4;
+    else if(lowerCount == 0) LUT_result = 0;
+    else if (keyIndex != -1) {
+        LUT_result = LUT_cuda[lutOffsets[keyIndex] + decimal_value];
+    } else {
+        LUT_result = -1; // 未找到
+    }
+
+    
+    if(type==0){
+        results[g_idx] = LUT_result;
+        
+    }
+    else{
+
+        // if(host_count_f_min>0){
+        //     dim3 gridSize_fmin((host_count_f_min + blockSize.x - 1) / blockSize.x);
+        //     c_loop<<<gridSize_fmin, blockSize>>>(1);
+        //     cudaDeviceSynchronize();
+        // }
+                
+        // if(host_count_f_saddle>0 ){
+        //     dim3 gridSize_saddle((host_count_f_saddle + blockSize.x - 1) / blockSize.x);
+        //     c_loop<<<gridSize_saddle, blockSize>>>(2);
+        //     cudaDeviceSynchronize();
+        // }
+        
+        // if(host_count_f_max>0){
+        //     dim3 gridSize_fmax((host_count_f_max + blockSize.x - 1) / blockSize.x);
+        //     c_loop<<<gridSize_fmax, blockSize>>>(0);
+        //     cudaDeviceSynchronize();
+        // }
+        int ori_type = vertex_type[g_idx];
+        if(LUT_result != ori_type){
+                // maximum
+                if((LUT_result==4 and ori_type!=4) or (LUT_result!=4 and ori_type==4)){
+                    int idx_fp_max = atomicAdd(&count_f_max, 1);
+                    all_max[idx_fp_max] = g_idx;
+                    // c_loop_local(g_idx, 0);
+                    
+                } 
+                if((LUT_result==0 and ori_type!=0) or (LUT_result!=0 and ori_type==0)){
+                    int idx_fp_min = atomicAdd(&count_f_min, 1);
+                    all_min[idx_fp_min] = g_idx;
+                    // c_loop_local(g_idx, 1);
+                }
+                if((LUT_result==2 and ori_type!=2) or (LUT_result!=2 and ori_type==2)){
+                    int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
+                    all_saddle[idx_fp_saddle] = g_idx;
+                    // c_loop_local(g_idx, 2);
+                    // fix_saddle_local(g_idx, lowerStar, lowerCount, lowerStars+g_idx*(maxNeighbors + 1), lowerStars[g_idx*(maxNeighbors + 1) +maxNeighbors]);
+                }
+
+                if((LUT_result==1 and ori_type!=1) or (LUT_result!=1 and ori_type==1)){
+                    int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
+                    all_saddle[idx_fp_saddle] = g_idx;
+                    // c_loop_local(g_idx, 2);
+                    // fix_saddle_local(g_idx, lowerStar, lowerCount, lowerStars+g_idx*(maxNeighbors + 1), lowerStars[g_idx*(maxNeighbors + 1) +maxNeighbors]);
+                }
+
+                if((LUT_result==3 and ori_type!=3) or (LUT_result!=3 and ori_type==3)){
+                    int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
+                    all_saddle[idx_fp_saddle] = g_idx;
+                    // c_loop_local(g_idx, 2);
+                    // fix_saddle_local(g_idx, lowerStar, lowerCount, lowerStars+g_idx*(maxNeighbors + 1), lowerStars[g_idx*(maxNeighbors + 1) +maxNeighbors]);
+                }
+
+
+        }
+
+        else if(LUT_result==2 and ori_type==2 || LUT_result== 1 and ori_type==1 || LUT_result== 3 and ori_type==3){
+                
+            if(areVectorsDifferent_local(g_idx, lowerStar, lowerCount)){
+                int idx_fp_saddle = atomicAdd(&count_f_saddle, 1);
+                all_saddle[idx_fp_saddle] = g_idx;
+                // fix_saddle_local(g_idx, lowerStar, lowerCount, lowerStars+g_idx*(maxNeighbors + 1), lowerStars[g_idx*(maxNeighbors + 1) +maxNeighbors]);
+            }
+        }
+    }
+}
+
 void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count_f_min, int host_count_f_saddle){
     float vertexClassification = 0.0;
     float get_fcp = 0.0;
@@ -3490,11 +3638,15 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
     cudaMemcpyToSymbol(count_f_min, &initialValue, sizeof(int));
     cudaMemcpyToSymbol(count_f_saddle, &initialValue, sizeof(int));
     auto start = std::chrono::high_resolution_clock::now();
+
+    init_delta<<<gridSize, blockSize>>>();
+    cudaDeviceSynchronize();
     classifyVertex_CUDA<<<gridDim1, blockDim1>>>(1, 0);
     cudaDeviceSynchronize();
-    
-    init_update<<<gridSize, blockSize>>>();
-    cudaDeviceSynchronize();
+    // init_update<<<gridSize, blockSize>>>();
+    // cudaDeviceSynchronize();
+    // applyDeltaBuffer<<<gridSize, blockSize>>>();
+    // cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     vertexClassification += duration.count();
@@ -3505,7 +3657,7 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
     // cudaMemcpyToSymbol(count_f_saddle, &initialValue, sizeof(int));
     start = std::chrono::high_resolution_clock::now();
     // get_false_criticle_points<<<gridSize, blockSize>>>(); 
-    cudaDeviceSynchronize();   
+    // cudaDeviceSynchronize();   
     end = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     get_fcp += duration.count();
@@ -3515,9 +3667,10 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
     cudaMemcpyFromSymbol(&host_count_f_saddle, count_f_saddle, sizeof(int), 0, cudaMemcpyDeviceToHost);
     int cnt = 0;
     while(host_count_f_max>0 or host_count_f_min>0 or host_count_f_saddle>0){
-        std::cout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
+        // std::cout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
         cnt++;
         start = std::chrono::high_resolution_clock::now();
+
         init_delta<<<gridSize, blockSize>>>();
         cudaDeviceSynchronize();
         end = std::chrono::high_resolution_clock::now();
@@ -3549,8 +3702,13 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
         c_loopt += duration.count();
 
         start = std::chrono::high_resolution_clock::now();
+
+        init_update<<<gridSize, blockSize>>>();
+        cudaDeviceSynchronize();
         applyDeltaBuffer<<<gridSize, blockSize>>>();
         cudaDeviceSynchronize();
+        
+        
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         apply_deltat += duration.count();
@@ -3560,10 +3718,15 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
         cudaMemcpyToSymbol(count_f_saddle, &initialValue, sizeof(int));
 
         start = std::chrono::high_resolution_clock::now();
+        
+        // init_delta<<<gridSize, blockSize>>>();
+        // cudaDeviceSynchronize();
         classifyVertex_CUDA<<<gridDim1, blockDim1>>>(1);
         cudaDeviceSynchronize();
-        init_update<<<gridSize, blockSize>>>();
-        cudaDeviceSynchronize();
+        // applyDeltaBuffer<<<gridSize, blockSize>>>();
+        // cudaDeviceSynchronize();
+        // init_update<<<gridSize, blockSize>>>();
+        // cudaDeviceSynchronize();
 
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -3574,7 +3737,7 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
 
         start = std::chrono::high_resolution_clock::now();
         // get_false_criticle_points<<<gridSize, blockSize>>>();    
-        cudaDeviceSynchronize();
+        // cudaDeviceSynchronize();
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         get_fcp += duration.count();
@@ -3771,7 +3934,7 @@ void r_loops(dim3 gridSize, dim3 blockSize, int host_number_of_false_cases, int 
 void saddle_loops(dim3 gridSize_max, dim3 gridSize, dim3 blockSize){
     cudaMemcpyToSymbol(wrong_saddle_counter, &initialValue, sizeof(int));
     init_saddle_rank_buffer<<<gridSize, blockSize>>>();
-    get_wrong_index_saddles<<<gridSize_max, blockSize>>>();
+    // get_wrong_index_saddles<<<gridSize_max, blockSize>>>();
     init_delta<<<gridSize, blockSize>>>();
     // std::cout<<wrong_saddle_counter<<std::endl;
     int host_wrong_saddle_counter = 0;
@@ -3787,7 +3950,7 @@ void saddle_loops(dim3 gridSize_max, dim3 gridSize, dim3 blockSize){
 void saddle_loops_join(dim3 gridSize_min, dim3 gridSize, dim3 blockSize){
     cudaMemcpyToSymbol(wrong_saddle_counter_join, &initialValue, sizeof(int));
     init_saddle_rank_buffer<<<gridSize, blockSize>>>(1);
-    get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>();
+    // get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>();
     init_delta<<<gridSize, blockSize>>>();
     int host_wrong_saddle_counter_join = 0;
     cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
@@ -3826,7 +3989,7 @@ std::vector<uint8_t> encodeTo3BitBitmap(const std::vector<int>& data) {
     int bitIndex = 0; // 当前位的索引
 
     for (int value : data) {
-        if (value < 0 || value > 6) {
+        if (value < 0 || value > 7) {
             
             std::cerr << "错误：输入值超出范围 (0-6)。"<<value << std::endl;
         return {};
@@ -3863,8 +4026,10 @@ void cost(std::string filename, double* decp_data, double* decp_data_copy, doubl
             if (decp_data_copy[i]!=decp_data[i]){
                 indexs[i] = delta_counter[i];
                 
-                if(indexs[i]==6){
-                    edits.push_back(-(decp_data_copy[i] - (input_data[i] - host_bound)));
+                if(indexs[i]==7){
+                    // edits.push_back(-(decp_data_copy[i] - (input_data[i] - host_bound)));
+                    edits.push_back(input_data[i]);
+                    // edits.push_back((input_data[i] - host_bound));
                 }
                 cnt++;
             }
@@ -3972,6 +4137,13 @@ void cost(std::string filename, double* decp_data, double* decp_data_copy, doubl
         return;
 };
 
+void checkCudaError(cudaError_t err, const char* msg) {
+    if (err != cudaSuccess) {
+        std::cerr << msg << ": " << cudaGetErrorString(err) << std::endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
 int main(int argc, char** argv){
     std::cout<<LUT_SIZE<<std::endl;
     
@@ -3979,6 +4151,7 @@ int main(int argc, char** argv){
     std::string dimension = argv[1];
     er = std::stod(argv[2]);
     std::string compressor_id = argv[3];
+    host_sim = std::stod(argv[4]);
 
     
     std::istringstream iss(dimension);
@@ -4072,10 +4245,10 @@ int main(int argc, char** argv){
     cudaMalloc(&wrong_rank_min_2_host, num_Elements_host * sizeof(int));
     cudaMalloc(&wrong_rank_min_index_2_host, num_Elements_host * 2 * sizeof(int));
     cudaMalloc(&lowerStars_host, (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
-    cudaMalloc(&dec_lowerStars_host, (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
+    // cudaMalloc(&dec_lowerStars_host, (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
     
     cudaMalloc(&upperStars_host, (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
-    cudaMalloc(&dec_upperStars_host, (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
+    // cudaMalloc(&dec_upperStars_host, (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
     
     // cudaMalloc(&adjacency_host, maxNeighbors_host * num_Elements_host * sizeof(int));
     cudaMalloc(&minimum_host, num_Elements_host * sizeof(int));
@@ -4117,9 +4290,9 @@ int main(int argc, char** argv){
     cudaMemset(wrong_rank_min_2_host, -1,  num_Elements_host * sizeof(int));
     cudaMemset(wrong_rank_min_index_2_host, -1,  num_Elements_host * 2 * sizeof(int));
     cudaMemset(lowerStars_host, -1,  (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
-    cudaMemset(dec_lowerStars_host, -1,  (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
+    // cudaMemset(dec_lowerStars_host, -1,  (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
     cudaMemset(upperStars_host, -1,  (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
-    cudaMemset(dec_upperStars_host, -1,  (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
+    // cudaMemset(dec_upperStars_host, -1,  (maxNeighbors_host+1) * num_Elements_host * sizeof(int));
     
     // cudaMemset(adjacency_host, -1,  maxNeighbors_host * num_Elements_host * sizeof(int));
     cudaMemset(minimum_host, -1, num_Elements_host * sizeof(int));
@@ -4147,8 +4320,8 @@ int main(int argc, char** argv){
     cudaMemcpyToSymbol(dec_AS_M, &dec_AS_M_host, sizeof(int*));
     cudaMemcpyToSymbol(lowerStars, &lowerStars_host, sizeof(int*));
     cudaMemcpyToSymbol(upperStars, &upperStars_host, sizeof(int*));
-    cudaMemcpyToSymbol(dec_lowerStars, &dec_lowerStars_host, sizeof(int*));
-    cudaMemcpyToSymbol(dec_upperStars, &dec_upperStars_host, sizeof(int*));
+    // cudaMemcpyToSymbol(dec_lowerStars, &dec_lowerStars_host, sizeof(int*));
+    // cudaMemcpyToSymbol(dec_upperStars, &dec_upperStars_host, sizeof(int*));
     // cudaMemcpyToSymbol(adjacency, &adjacency_host, sizeof(int*));
     cudaMemcpyToSymbol(minimum, &minimum_host, sizeof(int*));
     cudaMemcpyToSymbol(saddles1, &saddles1_host, sizeof(int*));
@@ -4189,7 +4362,9 @@ int main(int argc, char** argv){
     cudaMemcpyToSymbol(wrong_rank_saddle_join_index, &wrong_rank_saddle_join_index_host, sizeof(int*));
 
     cudaMemcpyToSymbol(bound, &host_bound, sizeof(double), 0, cudaMemcpyHostToDevice);
+    cudaMemcpyToSymbol(thr, &host_thre, sizeof(double), 0, cudaMemcpyHostToDevice);
     
+    std::cout<<host_thre<<std::endl;
     dim3 blockSize(256);
     dim3 gridSize((num_Elements_host + blockSize.x - 1) / blockSize.x);
 
@@ -4350,21 +4525,22 @@ int main(int argc, char** argv){
     cudaMalloc(&saddlerank_host, nSaddle2_host * sizeof(int));
     cudaMalloc(&dec_saddle1rank_host, nSaddle1_host * sizeof(int));
     cudaMalloc(&saddle1rank_host, nSaddle1_host * sizeof(int));
-    // cudaMalloc(&reachable_saddle_for_Max_host, (nSaddle2_host + 1) * nMax_host * sizeof(int));
-    // cudaMalloc(&dec_reachable_saddle_for_Max_host, (nSaddle2_host + 1) * nMax_host * sizeof(int));
+    
+    cudaMalloc(&reachable_saddle_for_Max_host, 45 * nMax_host * sizeof(int));
+    cudaMalloc(&dec_reachable_saddle_for_Max_host, 45 * nMax_host * sizeof(int));
 
-    // cudaMalloc(&reachable_saddle_for_Min_host, (nSaddle1_host + 1) * nMin_host * sizeof(int));
-    // cudaMalloc(&dec_reachable_saddle_for_Min_host, (nSaddle1_host + 1) * nMin_host * sizeof(int));
-    // cudaMalloc(&max_index_host, num_Elements_host * sizeof(int));
+    cudaMalloc(&reachable_saddle_for_Min_host, 45 * nMin_host * sizeof(int));
+    cudaMalloc(&dec_reachable_saddle_for_Min_host, 45 * nMin_host * sizeof(int));
+    cudaMalloc(&max_index_host, num_Elements_host * sizeof(int));
     
     // cudaMalloc(&tempArray_host, num_Elements_host * sizeof(int));
     // cudaMalloc(&dec_tempArray_host, num_Elements_host * sizeof(int));
     // cudaMalloc(&tempArrayMin_host, num_Elements_host * sizeof(int));
     // cudaMalloc(&dec_tempArrayMin_host, num_Elements_host * sizeof(int));
-    cudaMalloc(&largestSaddlesForMax_host, nMax_host * sizeof(int));
-    cudaMalloc(&dec_largestSaddlesForMax_host, nMax_host * sizeof(int));
-    cudaMalloc(&smallestSaddlesForMin_host, nMin_host * sizeof(int));
-    cudaMalloc(&dec_smallestSaddlesForMin_host, nMin_host * sizeof(int));
+    // cudaMalloc(&largestSaddlesForMax_host, nMax_host * sizeof(int));
+    // cudaMalloc(&dec_largestSaddlesForMax_host, nMax_host * sizeof(int));
+    // cudaMalloc(&smallestSaddlesForMin_host, nMin_host * sizeof(int));
+    // cudaMalloc(&dec_smallestSaddlesForMin_host, nMin_host * sizeof(int));
 
     // cudaMemset(dec_saddlerank_host, -1, nSaddle2_host * sizeof(int));
     // cudaMemset(saddlerank_host, -1, nSaddle2_host *  sizeof(int));
@@ -4378,39 +4554,41 @@ int main(int argc, char** argv){
     // cudaMemset(tempArrayMin_host, -1, num_Elements_host * sizeof(int));
     // cudaMemset(dec_tempArrayMin_host, -1, num_Elements_host * sizeof(int));
     
-    cudaMemset(largestSaddlesForMax_host,-1, nMax_host * sizeof(int));
-    cudaMemset(dec_largestSaddlesForMax_host, -1,nMax_host * sizeof(int));
-    cudaMemset(smallestSaddlesForMin_host,-1, nMin_host * sizeof(int));
-    cudaMemset(dec_smallestSaddlesForMin_host, -1, nMin_host * sizeof(int));
-    // cudaMemset(reachable_saddle_for_Max_host, 0, (nSaddle2_host + 1) * nMax_host * sizeof(int));
-    // cudaMemset(dec_reachable_saddle_for_Max_host, 0, (nSaddle2_host + 1) * nMax_host * sizeof(int));
+    // cudaMemset(largestSaddlesForMax_host,-1, nMax_host * sizeof(int));
+    // cudaMemset(dec_largestSaddlesForMax_host, -1,nMax_host * sizeof(int));
+    // cudaMemset(smallestSaddlesForMin_host,-1, nMin_host * sizeof(int));
+    // cudaMemset(dec_smallestSaddlesForMin_host, -1, nMin_host * sizeof(int));
 
-    // cudaMemset(reachable_saddle_for_Min_host, 0, (nSaddle1_host + 1) * nMin_host * sizeof(int));
-    // cudaMemset(dec_reachable_saddle_for_Min_host, 0, (nSaddle1_host + 1) * nMin_host * sizeof(int));
+    cudaMemset(reachable_saddle_for_Max_host, 0, 45 * nMax_host * sizeof(int));
+    cudaMemset(dec_reachable_saddle_for_Max_host, 0, 45 * nMax_host * sizeof(int));
 
-    // cudaMemset(max_index_host, 0, num_Elements_host * sizeof(int));
+    cudaMemset(reachable_saddle_for_Min_host, 0, 45 * nMin_host * sizeof(int));
+    cudaMemset(dec_reachable_saddle_for_Min_host, 0, 45 * nMin_host * sizeof(int));
+
+    checkCudaError(cudaMemset(max_index_host, 0, num_Elements_host * sizeof(int)), "error");
 
     cudaMemcpyToSymbol(saddleTriplets, &saddleTriplets_host, sizeof(int*));
     cudaMemcpyToSymbol(dec_saddleTriplets, &dec_saddleTriplets_host, sizeof(int*));
     cudaMemcpyToSymbol(saddle1Triplets, &saddle1Triplets_host, sizeof(int*));
     cudaMemcpyToSymbol(dec_saddle1Triplets, &dec_saddle1Triplets_host, sizeof(int*));
-    // cudaMemcpyToSymbol(reachable_saddle_for_Max, &reachable_saddle_for_Max_host, sizeof(int*));
-    // cudaMemcpyToSymbol(dec_reachable_saddle_for_Max, &dec_reachable_saddle_for_Max_host, sizeof(int*));
+   
+    cudaMemcpyToSymbol(reachable_saddle_for_Max, &reachable_saddle_for_Max_host, sizeof(int*));
+    cudaMemcpyToSymbol(dec_reachable_saddle_for_Max, &dec_reachable_saddle_for_Max_host, sizeof(int*));
 
-    // cudaMemcpyToSymbol(reachable_saddle_for_Min, &reachable_saddle_for_Min_host, sizeof(int*));
-    // cudaMemcpyToSymbol(dec_reachable_saddle_for_Min, &dec_reachable_saddle_for_Min_host, sizeof(int*));
+    cudaMemcpyToSymbol(reachable_saddle_for_Min, &reachable_saddle_for_Min_host, sizeof(int*));
+    cudaMemcpyToSymbol(dec_reachable_saddle_for_Min, &dec_reachable_saddle_for_Min_host, sizeof(int*));
 
-    // cudaMemcpyToSymbol(max_index, &max_index_host, sizeof(int*));
+    cudaMemcpyToSymbol(max_index, &max_index_host, sizeof(int*));
     // cudaMemset(reachable_saddle_for_Max_host, -1, nSaddle2_host * nMax_host * sizeof(int));
     // cudaMemcpyToSymbol(tempArray, &tempArray_host, sizeof(int*));
     // cudaMemcpyToSymbol(dec_tempArray, &dec_tempArray_host, sizeof(int*));
     // cudaMemcpyToSymbol(tempArrayMin, &tempArrayMin_host, sizeof(int*));
     // cudaMemcpyToSymbol(dec_tempArrayMin, &dec_tempArrayMin_host, sizeof(int*));
 
-    cudaMemcpyToSymbol(largestSaddlesForMax, &largestSaddlesForMax_host, sizeof(int*));
-    cudaMemcpyToSymbol(dec_largestSaddlesForMax, &dec_largestSaddlesForMax_host, sizeof(int*));
-    cudaMemcpyToSymbol(smallestSaddlesForMin, &smallestSaddlesForMin_host, sizeof(int*));
-    cudaMemcpyToSymbol(dec_smallestSaddlesForMin, &dec_smallestSaddlesForMin_host, sizeof(int*));
+    // cudaMemcpyToSymbol(largestSaddlesForMax, &largestSaddlesForMax_host, sizeof(int*));
+    // cudaMemcpyToSymbol(dec_largestSaddlesForMax, &dec_largestSaddlesForMax_host, sizeof(int*));
+    // cudaMemcpyToSymbol(smallestSaddlesForMin, &smallestSaddlesForMin_host, sizeof(int*));
+    // cudaMemcpyToSymbol(dec_smallestSaddlesForMin, &dec_smallestSaddlesForMin_host, sizeof(int*));
 
     // cudaMemcpyToSymbol(dec_saddlerank, &dec_saddlerank_host, sizeof(int*));
     // cudaMemcpyToSymbol(saddlerank, &saddlerank_host, sizeof(int*));
@@ -4442,10 +4620,10 @@ int main(int argc, char** argv){
     // sortTripletsOnGPU(saddleTriplets_host, nSaddle2_host, input_data_host);
     // sortTripletsOnGPU(saddle1Triplets_host, nSaddle1_host, input_data_host);
 
-    computelargestSaddlesForMax<<<gridSize_max, blockSize>>>();
-    cudaDeviceSynchronize();
-    computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>();
-    cudaDeviceSynchronize();
+    // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>();
+    // cudaDeviceSynchronize();
+    // computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>();
+    // cudaDeviceSynchronize();
     // return 0;
     // compute_Max_for_Saddle<<<gridSize_2saddle, blockSize>>>();
     // compute_Min_for_Saddle<<<gridSize_1saddle, blockSize>>>();
@@ -4499,8 +4677,8 @@ int main(int argc, char** argv){
     // sortTripletsOnGPU(dec_saddleTriplets_host, nSaddle2_host, decp_data_host);
     // sortTripletsOnGPU(dec_saddle1Triplets_host, nSaddle1_host, decp_data_host);
 
-    computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
-    computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
+    // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
+    // computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
     
     init_neighbor_buffer<<<gridSize, blockSize>>>();
     cudaDeviceSynchronize();
@@ -4560,7 +4738,7 @@ int main(int argc, char** argv){
         std::vector<float> temp_time;
         std::cout<<
         "whole loops:"<<host_number_of_false_cases<<", "<<host_number_of_false_cases1<<", "<<
-        host_count_f_max <<", "<< host_count_f_min << ", "<<host_count_f_saddle<<", "
+        host_count_f_max <<", "<< host_count_f_min << ", "<< host_count_f_saddle<<", "
         <<host_wrong_max_counter<<", "<<host_wrong_max_counter_2<<", "<<host_wrong_saddle_counter
         <<", "<<host_wrong_min_counter<<", "<<host_wrong_min_counter_2<<", "<<host_wrong_saddle_counter_join<<std::endl;
         
@@ -4628,10 +4806,10 @@ int main(int argc, char** argv){
         // sortTripletsOnGPU(dec_saddleTriplets_host, nSaddle2_host, decp_data_host);
         // sortTripletsOnGPU(dec_saddle1Triplets_host, nSaddle1_host, decp_data_host);
 
-        cudaEventRecord(start, 0);
-        computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
-        computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
-        cudaDeviceSynchronize();
+        // cudaEventRecord(start, 0);
+        // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
+        // computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
+        // cudaDeviceSynchronize();
         
         cudaEventRecord(stop, 0);
         cudaEventSynchronize(stop);
@@ -4749,8 +4927,8 @@ int main(int argc, char** argv){
         // sortTripletsOnGPU(dec_saddleTriplets_host, nSaddle2_host, decp_data_host);
         // sortTripletsOnGPU(dec_saddle1Triplets_host, nSaddle1_host, decp_data_host);
         cudaEventRecord(start, 0);
-        computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
-        computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
+        // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
+        // computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
         
         cudaDeviceSynchronize();
         cudaEventRecord(stop, 0);
@@ -4857,8 +5035,8 @@ int main(int argc, char** argv){
         saddle_t_sub+=elapsedTime/1000;
         
         cudaEventRecord(start, 0);
-        computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
-        computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
+        // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
+        // computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>(1);
         cudaDeviceSynchronize();
         cudaEventRecord(stop, 0);
         cudaEventSynchronize(stop);
@@ -4890,7 +5068,7 @@ int main(int argc, char** argv){
             cudaDeviceSynchronize();
             cudaMemcpyToSymbol(wrong_saddle_counter, &initialValue, sizeof(int));
             init_saddle_rank_buffer<<<gridSize, blockSize>>>();
-            get_wrong_index_saddles<<<gridSize_max, blockSize>>>();
+            // get_wrong_index_saddles<<<gridSize_max, blockSize>>>();
             cudaDeviceSynchronize();
             cudaMemcpyFromSymbol(&host_wrong_saddle_counter, wrong_saddle_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_max_counter, wrong_max_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
@@ -4907,7 +5085,7 @@ int main(int argc, char** argv){
             cudaDeviceSynchronize();
             init_saddle_rank_buffer<<<gridSize, blockSize>>>(1);
             cudaMemcpyToSymbol(wrong_saddle_counter_join, &initialValue, sizeof(int));
-            get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>();
+            // get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>();
             cudaDeviceSynchronize();
             cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_min_counter_2, wrong_min_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
@@ -4996,7 +5174,7 @@ int main(int argc, char** argv){
     
     // std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter
     
-    // saveArrayToBin(decp_d.data(), num_Elements_host, "fixed.bin");
+    saveArrayToBin(decp_data_copy_d.data(), num_Elements_host, "decp.bin");
     saveArrayToBin(decp_d.data(), num_Elements_host, "fixed.bin");
 
     
