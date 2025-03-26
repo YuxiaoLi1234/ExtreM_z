@@ -54,12 +54,18 @@
 #define SIZE (NUM_LOOKUP * MAX_V3 * 3 * sizeof(int))  // 计算数组大小
 int width_host, height_host, depth_host;
 int *adjacency_host;
+int nSaddle2_host = 0;
+int nMin_host = 0;
+int nMax_host = 0;
+int nSaddle1_host = 0;
+int host_wrong_min_counter = 0, host_wrong_min_counter_2 = 0, host_wrong_saddle_counter = 0, host_wrong_saddle_counter_join = 0, host_wrong_max_counter_2 = 0, host_wrong_max_counter = 0;
 __device__ int table[64];
 // __device__ int lookupTable[NUM_LOOKUP][NUM_LOOKUP][3];
 __device__ int lookupTable[NUM_LOOKUP][MAX_V3][3];
 
 int lookupTable_host[NUM_LOOKUP][MAX_V3][3];
 int maxNeighbors_host = 14;
+float additional_time, compression_time;
 int vertex_types[27] = {277, 153, 1050, 1179, 413, 2085, 10921, 554, 10923, 10925, 2357, 10937, 1594, 11963, 11197, 5462, 5463, 5470, 5599, 102, 2151, 622, 10991, 5494, 7543, 6014, 16383};
 __constant__ int neighborOffsets[14][3] = {
     {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0},
@@ -106,7 +112,8 @@ const int NUM_KEYS = sizeof(keys) / sizeof(keys[0]);
 const int LUT_SIZE = 6 * (1<<4) + 6 * (1 << 6) + 2* (1 << 7) + 6 * (1<<8) + 6 * (1<<10) + (1 << 14);
 
 __device__ int LUT_cuda[LUT_SIZE];
-
+int q_host, threshold_host;
+__device__ int q, threshold;
 int LUT[6 * (1<<4) + 6 * (1 << 6) + 2* (1 << 7) + 6 * (1<<8) + 6 * (1<<10) + (1 << 14)];
 // nvcc ExtreM_cuda.cu -o ExtreM_cuda -lzstd
 struct OffsetComparator {
@@ -121,7 +128,7 @@ struct OffsetComparator {
 };
 
 int initialValue = 0, num_Elements_host;
-__device__ double *d_deltaBuffer, *input_data, *decp_data, bound, thr;
+__device__ double *d_deltaBuffer, *input_data, *decp_data, bound, thr, *decp_data_copy_d;
 __device__ int count_f_max, count_f_min, count_f_saddle, 
                 width, height, depth, maxNeighbors, num_Elements, numFaces, num_false_cases, num_false_cases1;
 __device__ int *dec_vertex_type, *vertex_type, *vertex_cells, *dec_saddlerank, *saddlerank,
@@ -134,14 +141,16 @@ __device__ int *dec_vertex_type, *vertex_type, *vertex_cells, *dec_saddlerank, *
                 *dec_minimum, *dec_saddles1, *dec_saddles2, *dec_maximum,
                 *saddleTriplets, *dec_saddleTriplets, *saddle1Triplets, *dec_saddle1Triplets,
                 *tempArray, *dec_tempArray, *tempArrayMin, *dec_tempArrayMin, *largestSaddlesForMax, *dec_largestSaddlesForMax,
-                *smallestSaddlesForMin, *dec_smallestSaddlesForMin, *max_index;
+                *smallestSaddlesForMin, *dec_smallestSaddlesForMin, *max_index, *saddle_index, *saddle1_index,
+                *flattened_max2saddles, *max_offsets;
 __device__ int *or_saddle_max_map, *wrong_neighbors, *wrong_neighbors1, *wrong_neighbors_index, *wrong_rank_max, *wrong_rank_max_index, *wrong_rank_saddle, *wrong_rank_saddle_index, *wrong_rank_max_2, *wrong_rank_max_index_2;
 __device__ int *or_saddle_min_map, *wrong_neighbors_ds, *wrong_neighbors_ds_index, *wrong_rank_min, *wrong_rank_min_index, *wrong_rank_min_2, *wrong_rank_min_index_2;
-__device__ int *wrong_rank_saddle_join, *wrong_rank_saddle_join_index;
+__device__ int *wrong_rank_saddle_join, *wrong_rank_saddle_join_index, *simplified;
 __device__ int nSaddle2 = 0, nSaddle1 = 0, nMin = 0, nMax = 0, dec_nSaddle2 = 0, dec_nSaddle1 = 0, dec_nMin = 0, dec_nMax = 0;
 __device__ int number_of_false_cases = 0, wrong_max_counter = 0, wrong_saddle_counter = 0, wrong_saddle_counter_join = 0, wrong_max_counter_2 = 0, globalMin = 0, dec_globalMin = 0;
 __device__ int number_of_false_cases1 = 0, wrong_min_counter = 0, wrong_min_counter_2 = 0;
 __device__ int *all_max, *all_min, *all_saddle, *updated_vertex;
+int *d_max_offsets, *d_flattened_max2saddles, *d_flattened_min1saddles, *d_min_offsets;
 __device__ int directions[42] = 
 {1,0,0,-1,0,0,
 0,1,0,0,-1,0,
@@ -164,7 +173,7 @@ int directions_host[42] =
 size_t cmpSize = 0;
 std::string file_path;
 double maxValue, minValue, er, host_bound, host_thre, host_sim;
-
+std::vector<int> saddleTriplets_d, saddle1Triplets_d, max_index_d;
 void getdata(const std::string &filename, double *input_data_host, double *decp_data_host, double *decp_data_copy, 
             const double er, double &bound, int data_size) {
         
@@ -210,7 +219,9 @@ void getdata(const std::string &filename, double *input_data_host, double *decp_
     
     cudaMemcpy(decp_data_host, d_buffer, data_size * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(decp_data_copy, d_buffer, data_size * sizeof(double), cudaMemcpyHostToDevice);
+
     cudaMemcpyToSymbol(decp_data, &decp_data_host, sizeof(double*));
+    cudaMemcpyToSymbol(decp_data_copy_d, &decp_data_copy, sizeof(double*));
     delete[] compressedData;
 
     
@@ -1425,7 +1436,6 @@ __global__ void get_vertex_traingle(){
                     nx >=0 && nx < width && ny >= 0 & ny <height && nz >= 0 
                     && nz<depth && neighbor < num_Elements && neighbor >=0 
                     && neighbor!=index && neighbor != v2 && neighbor > v2){
-                    if(index == 4830) printf("%d %d %d\n", index, v2, neighbor);
                     int triangleID = getTriangleID_3d(index, v2, neighbor, width, height, depth);
                     vertex_cells[index*42 + numTriangles++] = triangleID;
                 }
@@ -1598,7 +1608,7 @@ __global__ void ComputeAscendingManifold(int type = 0){
             }
         }
     }
-
+    is_saddle_neighbor = true;
     if(!is_saddle_neighbor) return;
     while(true){
         int u = AS_M_t[v];
@@ -1715,7 +1725,7 @@ __global__ void ExtractCP(int data_type = 0){
     int type = vertex_type[idx];
     int pos;
     if (type == 2 || type == 3) {
-        pos = atomicAdd(nSaddle2_t, 1);
+        int pos = atomicAdd(nSaddle2_t, 1);
         saddles2_t[pos] = idx;
     }
 
@@ -1733,6 +1743,8 @@ __global__ void ExtractCP(int data_type = 0){
         int pos = atomicAdd(nMin_t, 1);
         minimum_t[pos] = idx;
     }
+
+    
 
     // if(type==-1) printf("did not classified : %d\n", idx);
 }
@@ -1774,7 +1786,7 @@ __global__ void ComputeTempArray(int direction = 0, int type = 0){
 }
 
 __device__ bool islarger(const int v, const int u, const double *offset){
-    return offset[v] > offset[u] || (abs(offset[v] - offset[u]) == 0 && v > u);
+    return offset[v] > offset[u] || (fabs(offset[v] - offset[u]) == 0 && v > u);
 }
 
 __device__ bool islarger_shared(const int v, const int u, double value_v1, double value_v2){
@@ -1782,7 +1794,7 @@ __device__ bool islarger_shared(const int v, const int u, double value_v1, doubl
 }
 
 __device__ bool isless(const int v, const int u, const double* offset){
-    return offset[v] < offset[u] || (std::abs(offset[v] - offset[u]) == 0 && v < u);
+    return offset[v] < offset[u] || (fabs(offset[v] - offset[u]) == 0 && v < u);
 }
 
 __device__ bool isless_shared(const int v, const int u, double value_v1, double value_v2){
@@ -1847,10 +1859,10 @@ __global__ void findAscPaths(int type = 0){
         reachable_saddle_for_Max_t = reachable_saddle_for_Max;
     }
 
-    if(type == 1){
-        decp_data[saddles2[index]] = input_data[saddles2[index]] - bound;
-        delta_counter[saddles2[index]] = 7;
-    }
+    // if(type == 1){
+    //     decp_data[saddles2[index]] = input_data[saddles2[index]] - bound;
+    //     delta_counter[saddles2[index]] = threshold;
+    // }
     
     
     temp_Saddle_tripplets[44] = 0;
@@ -1872,25 +1884,14 @@ __global__ void findAscPaths(int type = 0){
             // int neighbor_id = adjacency[maxNeighbors * i + j];
             // if(neighbor_id == -1) continue;
             int maxi = desManifold[r];
-            if(islarger(r, vertexId, offset) && abs(offset[maxi] - vertexValue) >= thr) {
+            if(islarger(r, vertexId, offset) && fabs(offset[maxi] - vertexValue) >= thr) {
                 temp_Saddle_tripplets[temp_Saddle_tripplets[44]] = desManifold[r];
                 temp_Saddle_tripplets[44]++;
             }
         }
     }
-    // for(int k = 0; k < maxNeighbors; k++){
-        
-    //     const int neighborId = adjacency[maxNeighbors * vertexId + k];
-        
-    //     if(neighborId == -1) continue;
-    //     if(islarger(neighborId, vertexId, offset)) {
-    //         temp_Saddle_tripplets[temp_Saddle_tripplets[44]] = desManifold[neighborId];
-    //         temp_Saddle_tripplets[44]++;
-    //     }
-        
-    // }
-
-    temp_Saddle_tripplets[45] = saddles2_t[index];
+   
+    temp_Saddle_tripplets[45] = vertexId;
 
    
     int ItemSize = temp_Saddle_tripplets[44];
@@ -1900,8 +1901,26 @@ __global__ void findAscPaths(int type = 0){
     for(int i = 0; i < ItemSize; i++){
         saddleTriplets_t[index * 46 + i] = temp_Saddle_tripplets[i];
         // int max_index_t = max_index[temp_Saddle_tripplets[i]];
-        // int idx_fp = atomicAdd(&reachable_saddle_for_Max_t[max_index_t * 45 + 44], 1);
-        // reachable_saddle_for_Max_t[max_index_t * 45 + idx_fp] = saddles2[index];
+        // bool found = false;
+        // for(int i = 0; i<reachable_saddle_for_Max_t[max_index_t * 45 + 44]; i++){
+        //     if(vertexId == reachable_saddle_for_Max_t[max_index_t * 45+i]){
+        //         found = true;
+        //         break;
+        //     }
+        // }
+        // if(!found){
+        //     int idx_fp = atomicAdd(&reachable_saddle_for_Max_t[max_index_t * 45 + 44], 1);
+        //     if(idx_fp>=44){
+        //         printf("here: %d %d\n", vertexId, idx_fp);
+        //         // for(int i = 0; i<reachable_saddle_for_Max_t[max_index_t * 45 + 44]; i++){
+        //         //     printf("%d, ", reachable_saddle_for_Max_t[max_index_t * 45+i]);
+        //         // }
+        //         // printf("\n");
+        //         // return;
+        //     }
+        //     // reachable_saddle_for_Max_t[max_index_t * 45 + idx_fp] = saddles2[index];
+        // }
+        
         // wrong_neighbors_index[idx_fp] = neighborId;
     }
     saddleTriplets_t[index * 46 + 44] = temp_Saddle_tripplets[44];
@@ -1911,6 +1930,7 @@ __global__ void findAscPaths(int type = 0){
     //     printf("%d %d\n", saddleTriplets[index * 46 + i] ,temp_Saddle_tripplets[i]);
     // }
     // }
+
     
 }
 
@@ -1918,7 +1938,6 @@ __global__ void computeMaxIndex(){
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     if(index>=nMax) return;
     max_index[maximum[index]] = index;
-    
 }
 
 __global__ void computeMinIndex(){
@@ -1928,6 +1947,19 @@ __global__ void computeMinIndex(){
     
 }
 
+__global__ void computeSaddleIndex(){
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if(index>=nSaddle2) return;
+    saddle_index[saddles2[index]] = index;
+    
+}
+
+__global__ void computeSaddle1Index(){
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if(index>=nSaddle1) return;
+    saddle1_index[saddles1[index]] = index;
+    
+}
 
 
 __global__ void findDescPaths(int type = 0){
@@ -1950,10 +1982,10 @@ __global__ void findDescPaths(int type = 0){
         reachable_saddle_for_Min_t = reachable_saddle_for_Min;
     }
 
-    if(type == 1){
-        decp_data[saddles1[index]] = input_data[saddles1[index]] - bound;
-        delta_counter[saddles1[index]] = 7;
-    }
+    // if(type == 1){
+    //     decp_data[saddles1[index]] = input_data[saddles1[index]] - bound;
+    //     delta_counter[saddles1[index]] = threshold;
+    // }
     
     temp_Saddle_tripplets[44] = 0;
     const int vertexId = saddles1_t[index];
@@ -1973,7 +2005,9 @@ __global__ void findDescPaths(int type = 0){
         
         if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
             int mini = asManifold[r];
-            if(isless(r, vertexId, offset) && abs(offset[mini] - vertexValue) >= thr) {
+            double miniValue = offset[mini];
+            if(isless(r, vertexId, offset)) {
+                // if(mini==4755) printf("%d %d %.17f %.17f %.17f\n", mini, vertexId, fabs(offset[mini] - vertexValue), offset[mini], vertexValue);
                 temp_Saddle_tripplets[temp_Saddle_tripplets[44]] = asManifold[r];
                 temp_Saddle_tripplets[44]++;
             }
@@ -1993,13 +2027,26 @@ __global__ void findDescPaths(int type = 0){
     int ItemSize = temp_Saddle_tripplets[44];
     temp_Saddle_tripplets[45] = saddles1_t[index];
     reversed_insertionSort(temp_Saddle_tripplets, ItemSize, offset);
-
+    
     // for(int i = 0; i < 46; i++){
     //     saddle1Triplets_t[index * 46 + i] = temp_Saddle_tripplets[i];
     // }
 
     for(int i = 0; i < ItemSize; i++){
         saddle1Triplets_t[index * 46 + i] = temp_Saddle_tripplets[i];
+        // if(vertexId == 2099) printf("%d %.17f\n", temp_Saddle_tripplets[i], offset[temp_Saddle_tripplets[i]]);
+        // int min_index_t = max_index[temp_Saddle_tripplets[i]];
+        // bool found = false;
+        // for(int i = 0; i<reachable_saddle_for_Min_t[min_index_t * 45 + 44]; i++){
+        //     if(min_index_t == reachable_saddle_for_Min_t[min_index_t * 45+i]){
+        //         found = true;
+        //         break;
+        //     }
+        // }
+        // if(!found){
+        //     int idx_fp = atomicAdd(&reachable_saddle_for_Min_t[min_index_t * 45 + 44], 1);
+        //     reachable_saddle_for_Min_t[min_index_t * 45 + idx_fp] = saddles1[index];
+        // }
         // int min_index_t = max_index[temp_Saddle_tripplets[i]];
         // int idx_fp = atomicAdd(&reachable_saddle_for_Min_t[min_index_t * 45 + 44], 1);
         // reachable_saddle_for_Min_t[min_index_t * 45 + idx_fp] = saddles1[index];
@@ -2075,6 +2122,128 @@ __global__ void computelargestSaddlesForMax(int type = 0){
     // }
 }
 
+__global__ void find_canceled_max(
+    const int* __restrict__ d_max_offsets,
+    const int* __restrict__ d_flattened_max2saddles
+){
+    // if a max's all connected saddle is canceled, then cancel this max
+    // if a 1-saddles's all connected max is canceled, then calcel this 1-saddle
+    // if a 2-saddles's all connected max is canceled, then calcel this 2-saddle
+    // if a min's all connected saddle is canceled, then cancel this min
+    int max_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (max_id >= nMax) return;
+
+    int start = d_max_offsets[max_id];
+    int end = d_max_offsets[max_id + 1];
+
+    
+    int best_saddle = -1;
+    int maxId = maximum[max_id];
+    bool isValid = false;
+    double m_val = input_data[maxId];
+    for (int i = start; i < end; ++i) {
+        int saddle = d_flattened_max2saddles[i];
+        
+        double val = input_data[saddle];
+
+        if (fabs(m_val - val) >= thr and maxId == saddleTriplets[max_index[saddle]*46]) isValid = true;
+    }
+    if(isValid == false) simplified[maxId] = 0;
+}
+
+__global__ void find_canceled_min(
+    const int* __restrict__ d_min_offsets,
+    const int* __restrict__ d_flattened_min1saddles
+){
+    // if a max's all connected saddle is canceled, then cancel this max
+    // if a 1-saddles's all connected max is canceled, then calcel this 1-saddle
+    // if a 2-saddles's all connected max is canceled, then calcel this 2-saddle
+    // if a min's all connected saddle is canceled, then cancel this min
+    int min_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (min_id >= nMin) return;
+
+    int start = d_min_offsets[min_id];
+    int end = d_min_offsets[min_id + 1];
+
+    int minId = minimum[min_id];
+    double m_val = input_data[minId];
+    bool isValid = false;
+    for (int i = start; i < end; ++i) {
+        int saddle = d_flattened_min1saddles[i];
+        double val = input_data[saddle];
+        if (fabs(m_val - val) >= thr) {
+            isValid = true;
+            break;
+        }
+    }
+
+    if(isValid == false) {
+        simplified[minId] = 0;
+        // printf("minimum %d is Valid\n", minId);
+    }
+    // int numMin = saddle1Triplets[saddle1_index[best_saddle]*46+44];
+    // if(minId == 4415) printf("saddle is:%d %d %d\n ", best_saddle, saddle1Triplets[saddle1_index[best_saddle]*46], saddle1Triplets[saddle1_index[best_saddle]*46 + numMin - 1]);
+    // if(fabs(max_val - m_val) >= thr && minId == saddle1Triplets[saddle1_index[best_saddle]*46 + numMin - 1]) {
+    //     simplified[minId] = 0;
+    //     printf("minimum %d is Valid\n", minId);
+    // }
+
+}
+
+__global__ void find_canceled_saddles(
+    const double* __restrict__ offset
+){
+    // if a max's all connected saddle is canceled, then cancel this max
+    // if a 1-saddles's all connected max is canceled, then calcel this 1-saddle
+    // if a 2-saddles's all connected max is canceled, then calcel this 2-saddle
+    // if a min's all connected saddle is canceled, then cancel this min
+    int saddle1_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (saddle1_id >= nSaddle1) return;
+    int saddleIdx = saddles1[saddle1_id];
+    double saddleValue = offset[saddleIdx];
+    int numMin = saddle1Triplets[saddle1_id * 46 + 44];
+    bool isValid = false;
+    for(int i = 0; i < numMin; i++){
+        int minIdx = saddle1Triplets[saddle1_id * 46 + i];
+        double minValue = offset[minIdx];
+        if(fabs(saddleValue-minValue) >= thr){
+            isValid = true;
+            break;
+        }
+    }
+    if(isValid == false) {
+        simplified[saddleIdx] = 0;
+        printf("%d is simplified\n", saddleIdx);
+    }
+}
+
+__global__ void find_canceled_2saddles(
+    const double* __restrict__ offset
+){
+    // if a max's all connected saddle is canceled, then cancel this max
+    // if a 1-saddles's all connected max is canceled, then calcel this 1-saddle
+    // if a 2-saddles's all connected max is canceled, then calcel this 2-saddle
+    // if a min's all connected saddle is canceled, then cancel this min
+    int saddle2_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (saddle2_id >= nSaddle2) return;
+    int saddleIdx = saddles2[saddle2_id];
+    double saddleValue = offset[saddleIdx];
+    int numMax = saddleTriplets[saddle2_id * 46 + 44];
+    bool isValid = false;
+    for(int i = 0; i < numMax; i++){
+        int maxIdx = saddleTriplets[saddle2_id * 46 + i];
+        double maxValue = offset[maxIdx];
+        if(fabs(saddleValue-maxValue) >= thr){
+            isValid = true;
+            break;
+        }
+    }
+    if(isValid == false) {
+        simplified[saddleIdx] = 0;
+        printf("%d is simplified\n", saddleIdx);
+    }
+}
+
 __global__ void computesmallestSaddlesForMin(int type = 0){
     // saddle is stored by descending rank;
     // find the largest saddle connected with eahc max;
@@ -2097,44 +2266,44 @@ __global__ void computesmallestSaddlesForMin(int type = 0){
     smallestSaddlesForMin_t[index] = -1;
     int globalMin = nMin - 1;
     int minId = minimum[index];
-    // for(int i = 0; i < nSaddle1; i++) {
-    //     // auto &triplet = saddleTriplets[i];
-    //     int saddle = saddles1[i];
-    //     int temp;
-    //     for(int p = 0; p < saddle1Triplets_t[i * 46 + 44]; p++) {
+    for(int i = 0; i < nSaddle1; i++) {
+        // auto &triplet = saddleTriplets[i];
+        int saddle = saddles1[i];
+        int temp;
+        for(int p = 0; p < saddle1Triplets_t[i * 46 + 44]; p++) {
             
-    //         const auto &min_v = saddle1Triplets_t[i * 46 + p];
-    //         if(min_v != minId) continue;
+            const auto &min_v = saddle1Triplets_t[i * 46 + p];
+            if(min_v != minId) continue;
 
-    //         if(smallestSaddlesForMin_t[index] == -1){
-    //             smallestSaddlesForMin_t[index] = saddle;
-    //             continue;
-    //         }
-    //         if(min_v != globalMin) {
-    //             temp = smallestSaddlesForMin_t[index];
-    //             if(isless(saddle, temp, offset)) {
-    //                 smallestSaddlesForMin_t[index] = saddle;
-    //             }
-    //         }
-    //     }
-    // }
-
-    int smallest = -1;
-    int min_index_t = max_index[minId];
-    int number_of_saddle = reachable_saddle_for_Min_t[min_index_t * 45 + 44] ;
-    for(int i = 0; i<number_of_saddle; i++){
-        
-        int reachable_saddle = reachable_saddle_for_Min_t[min_index_t * 45 + i];
-        if(vertex_type[reachable_saddle] == 1 || vertex_type[reachable_saddle] == 3){
-            if(smallest == -1) smallest = reachable_saddle;
-            else if(islarger(smallest, reachable_saddle,  offset)) smallest = reachable_saddle;
+            if(smallestSaddlesForMin_t[index] == -1){
+                smallestSaddlesForMin_t[index] = saddle;
+                continue;
+            }
+            if(min_v != globalMin) {
+                temp = smallestSaddlesForMin_t[index];
+                if(isless(saddle, temp, offset)) {
+                    smallestSaddlesForMin_t[index] = saddle;
+                }
+            }
         }
     }
 
-    if(smallest != -1){
-        // printf("wrong here %d %d %d\n", index, smallest, smallestSaddlesForMin_t[index] );
-        smallestSaddlesForMin_t[index] = smallest;
-    }
+    // int smallest = -1;
+    // int min_index_t = max_index[minId];
+    // int number_of_saddle = reachable_saddle_for_Min_t[min_index_t * 45 + 44] ;
+    // for(int i = 0; i<number_of_saddle; i++){
+        
+    //     int reachable_saddle = reachable_saddle_for_Min_t[min_index_t * 45 + i];
+    //     if(vertex_type[reachable_saddle] == 1 || vertex_type[reachable_saddle] == 3){
+    //         if(smallest == -1) smallest = reachable_saddle;
+    //         else if(islarger(smallest, reachable_saddle,  offset)) smallest = reachable_saddle;
+    //     }
+    // }
+
+    // if(smallest != -1){
+    //     // printf("wrong here %d %d %d\n", index, smallest, smallestSaddlesForMin_t[index] );
+    //     smallestSaddlesForMin_t[index] = smallest;
+    // }
 }
 
 __device__ int computeMaxLabel(int i, const double *offset){
@@ -2492,8 +2661,6 @@ __device__ double atomicCASDouble(double* address, double val) {
     
     old_val_as_ull = atomicCAS((unsigned long long int*)address_as_ull, (unsigned long long int)assumed, (unsigned long long int)new_val_as_ull);
     // } while (assumed != old_val_as_ull);
-
-    
     return __longlong_as_double(old_val_as_ull);
 }
 
@@ -2599,7 +2766,9 @@ __device__ void fix_saddle(int i){
         
         for(int index = 0; index<count; index++){
             const int id = diff[index];
-            delta = (input_data[id]-bound) - decp_data[id];
+            int c = delta_counter[id] + 1;
+            delta = -bound / (q);
+            // delta = (input_data[id]-bound) - decp_data[id];
             double oldValue = d_deltaBuffer[id];
             
             if (delta > oldValue) {
@@ -2612,7 +2781,9 @@ __device__ void fix_saddle(int i){
         
         count = findDifferences(o_lowerStar_start, o_size1, lowerStar_start, size1, i, diff1);
         if(count > 0){
-            delta = (input_data[i]-bound) - decp_data[i];
+            // delta = (input_data[i]-bound) - decp_data[i];
+            int c = delta_counter[i] + 1;
+            delta = -bound / (q);
             double oldValue = d_deltaBuffer[i];
             if (delta > oldValue) {
                 swap(i, delta);
@@ -2621,6 +2792,18 @@ __device__ void fix_saddle(int i){
     
     }
     return;
+}
+
+
+__device__ double get_bin(double i){
+    if(i>=0 && i<=0.25) return 0.25;
+    if(i>0.25 && i <=0.5 ) return 0.5;
+    if(i>0.5 && i<=0.75) return 0.75;
+    if(i>0.75 && i<=1) return 1;
+    if(i>1 && i<=1.25) return 1.25;
+    if(i>1.25 && i<=1.5) return 1.5;
+    if(i>1.5 && i<=1.75) return 1.75;
+    else return 2;
 }
 
 __device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
@@ -2669,7 +2852,14 @@ __device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
     
     for(int index = 0; index<count; index++){
         const int id = diff[index];
-        delta = (input_data[id]-bound) - decp_data[id];
+        int c = delta_counter[index] + 1;
+        delta = -bound / (q);
+        // double d = ((decp_data_copy_d[index] - 2 * bound) + decp_value) / 2.0 - decp_value;
+        // double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
+        // delta = ((input_data[id] - bound) + decp_data[id]) / 2.0 - decp_data[id];
+        // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[id] - bound) - decp_data_copy_d[id]) / bound));
+        // double Lower_bin1 = get_bin(abs((input_data[id] - bound) - decp_data_copy_d[id]) / bound);
+        // delta = ((decp_data_copy_d[id] - Lower_bin1 * bound) + decp_data[id]) / 2.0 - decp_data[id];
         double oldValue = d_deltaBuffer[id];
         
         if (delta > oldValue) {
@@ -2682,7 +2872,12 @@ __device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
     
     count = findDifferences_local(o_lowerStar_start, o_size1, lowerStar, lowerCount, diff1);
     if(count > 0){
-        delta = (input_data[i]-bound) - decp_data[i];
+        int c = delta_counter[i] + 1;
+        delta = -bound / (q);
+        // delta = ((input_data[i] - bound) + decp_data[i]) / 2.0 - decp_data[i];
+        // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[i] - bound) - decp_data_copy_d[i]) / bound));
+        // double Lower_bin1 = get_bin(abs((input_data[i] - bound) - decp_data_copy_d[i]) / bound);
+        // delta = ((decp_data_copy_d[i] - Lower_bin1 * bound) + decp_data[i]) / 2.0 - decp_data[i];
         double oldValue = d_deltaBuffer[i];
         if (delta > oldValue) {
             swap(i, delta);
@@ -2692,6 +2887,7 @@ __device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
     // }
     return;
 }
+
 
 __global__ void c_loop(int direction = 0){      
     // preservation of split tree?->decrease f
@@ -2710,8 +2906,12 @@ __global__ void c_loop(int direction = 0){
         double input_value = input_data[index];
         double decp_value = decp_data[index];
         if (vertex_type[index]!=4){
-            
-            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            int c = delta_counter[index] + 1;
+            double d = -bound / (q);
+            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            // int Lower_bin = static_cast<int>(std::ceil(abs((input_value - bound) - decp_data_copy_d[index]) / bound));
+            // double Lower_bin1 = get_bin(abs((input_value - bound) - decp_data_copy_d[index]) / bound);
+            // d = ((decp_data_copy_d[index] - Lower_bin1 * bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             
             if (d > oldValue) {
@@ -2750,9 +2950,14 @@ __global__ void c_loop(int direction = 0){
             if(decp_value>largest_value or(decp_value==largest_value and index>largest_index)){
                 return;
             }
+            int c = delta_counter[largest_index] + 1;
+            double d = -bound / (q);
+            // double d = ((decp_data_copy_d[largest_index] - 2 * bound) + largest_value) / 2.0 - largest_value;
+            // double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
+            // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[largest_index] - bound) - decp_data_copy_d[largest_index]) / bound));
+            // double Lower_bin1 = get_bin(abs((input_data[largest_index] - bound) - decp_data_copy_d[largest_index]) / bound);
+            // d = ((decp_data_copy_d[largest_index] - Lower_bin1 * bound) + decp_data[largest_index]) / 2.0 - decp_data[largest_index];
 
-            double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
-            
             double oldValue = d_deltaBuffer[largest_index];
             if (d > oldValue) {
                 swap(largest_index, d);
@@ -2804,7 +3009,13 @@ __global__ void c_loop(int direction = 0){
             //     }
             // }
             double decp_smallest_value = decp_data[smallest_index];
-            double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            int c = delta_counter[smallest_index] + 1;
+            double d = -bound / (q);
+            // double d = ((decp_data_copy_d[smallest_index] - 2 * bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            // double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[smallest_index] - bound) - decp_data_copy_d[smallest_index]) / bound));
+            // double Lower_bin1 = get_bin(abs((input_data[smallest_index] - bound) - decp_data_copy_d[smallest_index]) / bound);
+            // d = ((decp_data_copy_d[smallest_index] - Lower_bin1 * bound) + decp_data[smallest_index]) / 2.0 - decp_data[smallest_index];
             if(decp_value>decp_smallest_value or (decp_value==decp_smallest_value and index>smallest_index)){
                 return;
             }
@@ -2817,7 +3028,13 @@ __global__ void c_loop(int direction = 0){
         }
     
         else{
-            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            int c = delta_counter[index] + 1;
+            double d = -bound / (q);
+            // double d = ((decp_data_copy_d[index] - 2 * bound) + decp_value) / 2.0 - decp_value;
+            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[index] - bound) - decp_data_copy_d[index]) / bound));
+            // double Lower_bin1 = get_bin(abs((input_data[index] - bound) - decp_data_copy_d[index]) / bound);
+            // d = ((decp_data_copy_d[index] - Lower_bin1 * bound) + decp_data[index]) / 2.0 - decp_data[index];
             double oldValue = d_deltaBuffer[index];
             if (d > oldValue) {
                 swap(index, d);
@@ -2852,12 +3069,12 @@ __global__ void applyDeltaBuffer() {
     if (tid < num_Elements) {
         
         if(d_deltaBuffer[tid]!=-4.0 * bound){
-            if(abs(d_deltaBuffer[tid])>1e-15 && delta_counter[tid]<6 && abs(input_data[tid]-(decp_data[tid] + d_deltaBuffer[tid])) <= bound){
-                decp_data[tid] += d_deltaBuffer[tid]; 
+            if(delta_counter[tid] <threshold-1 && fabs(input_data[tid]-(decp_data[tid] - bound / (q))) <= bound){
+                decp_data[tid] -= bound / (q); 
                 delta_counter[tid]+=1;
             }
             else{
-                delta_counter[tid] = 7;
+                delta_counter[tid] = threshold;
                 decp_data[tid] = input_data[tid] - bound;
             }
             int x = tid % width;
@@ -2907,17 +3124,17 @@ __global__ void get_wrong_index_max(){
     }
     int numberOfMax = saddleTriplets[i * 46 + 44] - 1;
 
-    // if(saddleTriplets[i * 46 + numberOfMax] != dec_saddleTriplets[i * 46 + numberOfMax]){
-    //     int maxId = saddleTriplets[i * 46 + numberOfMax];
-    //     if(wrong_rank_max_2[maxId] == 0){
-    //         int pos = atomicAdd(&wrong_max_counter_2, 1);
-    //         wrong_rank_max_index_2[pos * 2] = saddleTriplets[i * 46 + numberOfMax];
-    //         wrong_rank_max_index_2[pos * 2 + 1] = dec_saddleTriplets[i * 46 + numberOfMax];
-    //         wrong_rank_max_2[maxId] = 1;
+    if(saddleTriplets[i * 46 + numberOfMax] != dec_saddleTriplets[i * 46 + numberOfMax]){
+        int maxId = saddleTriplets[i * 46 + numberOfMax];
+        if(wrong_rank_max_2[maxId] == 0){
+            int pos = atomicAdd(&wrong_max_counter_2, 1);
+            wrong_rank_max_index_2[pos * 2] = saddleTriplets[i * 46 + numberOfMax];
+            wrong_rank_max_index_2[pos * 2 + 1] = dec_saddleTriplets[i * 46 + numberOfMax];
+            wrong_rank_max_2[maxId] = 1;
             
             
-    //     }
-    // }
+        }
+    }
         
     
 }
@@ -2938,54 +3155,115 @@ __global__ void get_wrong_index_min(){
     }
     int numberOfmin = saddle1Triplets[i * 46 + 44] - 1;
     int dec_numberOfmin = dec_saddle1Triplets[i * 46 + 44] - 1;
-    // if(saddle1Triplets[i * 46 + numberOfmin] != dec_saddle1Triplets[i * 46 + dec_numberOfmin]){
-    //     int minId = saddle1Triplets[i * 46 + numberOfmin];
-    //     if(wrong_rank_min_2[minId] == 0){
+    if(saddle1Triplets[i * 46 + numberOfmin] != dec_saddle1Triplets[i * 46 + dec_numberOfmin]){
+        int minId = saddle1Triplets[i * 46 + numberOfmin];
+        if(wrong_rank_min_2[minId] == 0){
             
-    //         int pos = atomicAdd(&wrong_min_counter_2, 1);
-    //         wrong_rank_min_index_2[pos * 2] = saddle1Triplets[i * 46 + numberOfmin];
-    //         wrong_rank_min_index_2[pos * 2 + 1] = dec_saddle1Triplets[i * 46 + dec_numberOfmin];
-    //         wrong_rank_min_2[minId] = 1;
-    //     }
-    // }
+            int pos = atomicAdd(&wrong_min_counter_2, 1);
+            wrong_rank_min_index_2[pos * 2] = saddle1Triplets[i * 46 + numberOfmin];
+            wrong_rank_min_index_2[pos * 2 + 1] = dec_saddle1Triplets[i * 46 + dec_numberOfmin];
+            wrong_rank_min_2[minId] = 1;
+        }
+    }
         
     
 }
 
-__global__ void get_wrong_index_saddles(){
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i>=nMax) return;
+__global__ void get_wrong_index_saddles(
+    const int* __restrict__ d_max_offsets,
+    const int* __restrict__ d_flattened_max2saddles){
+    // int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // if(i>=nMax) return;
     
-    const int maxId = maximum[i];
+    // const int maxId = maximum[i];
     
-    if(dec_largestSaddlesForMax[i] != largestSaddlesForMax[i]){
-        if(wrong_rank_saddle[maxId] == 0){
-            int pos = atomicAdd(&wrong_saddle_counter, 1);
-            wrong_rank_saddle_index[pos * 2] = largestSaddlesForMax[i];
-            wrong_rank_saddle_index[pos * 2 + 1] = dec_largestSaddlesForMax[i];
+    // if(dec_largestSaddlesForMax[i] != largestSaddlesForMax[i]){
+    //     if(wrong_rank_saddle[maxId] == 0){
+    //         int pos = atomicAdd(&wrong_saddle_counter, 1);
+    //         wrong_rank_saddle_index[pos * 2] = largestSaddlesForMax[i];
+    //         wrong_rank_saddle_index[pos * 2 + 1] = dec_largestSaddlesForMax[i];
             
-            wrong_rank_saddle[maxId] = 1;
+    //         wrong_rank_saddle[maxId] = 1;
+    //     }
+    // }
+
+    int max_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (max_id >= nMax) return;
+
+    int start = d_max_offsets[max_id];
+    int end = d_max_offsets[max_id + 1];
+
+    
+
+    int true_largest = largestSaddlesForMax[max_id];
+    double true_largest_value = decp_data[true_largest];
+    int maxId = maximum[max_id];
+    bool isFalse = false;
+    for (int i = start; i < end; ++i) {
+        int saddle = d_flattened_max2saddles[i];
+        if(decp_data[saddle]> true_largest_value || (decp_data[saddle] == true_largest_value && saddle> true_largest)){
+            isFalse = true;
+            if(wrong_rank_saddle[maxId] == 0){
+                int pos = atomicAdd(&wrong_saddle_counter, 1);
+                wrong_rank_saddle_index[pos * 2] = true_largest;
+                wrong_rank_saddle_index[pos * 2 + 1] = saddle;
+                
+                wrong_rank_saddle[maxId] = 1;
+                // printf("%d %d %.17f %.17f\n", true_largest, saddle, true_largest_value, decp_data[saddle]);
+                return;
+            }
         }
     }
     
-
+    return;
 }
 
-__global__ void get_wrong_index_saddles_join(){
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if(i>=nMin) return;
+__global__ void get_wrong_index_saddles_join(
+    const int* __restrict__ d_min_offsets,
+    const int* __restrict__ d_flattened_min1saddles){
+    // int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // if(i>=nMin) return;
     
-    const int minId = minimum[i];
+    // const int minId = minimum[i];
    
-    if(dec_smallestSaddlesForMin[i] != smallestSaddlesForMin[i]){
-        if(wrong_rank_saddle_join[minId] == 0){
-            // if(smallestSaddlesForMin[i] == 5477) printf("%d %d\n", minId, i);
-            int pos = atomicAdd(&wrong_saddle_counter_join, 1);
-            wrong_rank_saddle_join_index[pos * 2] = smallestSaddlesForMin[i];
-            wrong_rank_saddle_join_index[pos * 2 + 1] = dec_smallestSaddlesForMin[i];
-            wrong_rank_saddle_join[minId] = 1;
+    // if(dec_smallestSaddlesForMin[i] != smallestSaddlesForMin[i]){
+    //     if(wrong_rank_saddle_join[minId] == 0){
+    //         // if(smallestSaddlesForMin[i] == 5477) printf("%d %d\n", minId, i);
+    //         int pos = atomicAdd(&wrong_saddle_counter_join, 1);
+    //         wrong_rank_saddle_join_index[pos * 2] = smallestSaddlesForMin[i];
+    //         wrong_rank_saddle_join_index[pos * 2 + 1] = dec_smallestSaddlesForMin[i];
+    //         wrong_rank_saddle_join[minId] = 1;
+    //     }
+    // }
+    int min_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (min_id >= nMin) return;
+
+    int start = d_min_offsets[min_id];
+    int end = d_min_offsets[min_id + 1];
+
+    
+
+    int true_smallest = smallestSaddlesForMin[min_id];
+    double true_smallest_value = decp_data[true_smallest];
+    int minId = minimum[min_id];
+    bool isFalse = false;
+    for (int i = start; i < end; ++i) {
+        int saddle = d_flattened_min1saddles[i];
+        if(isless_shared(decp_data[saddle], true_smallest_value, saddle, true_smallest)){
+            isFalse = true;
+            if(wrong_rank_saddle[minId] == 0){
+                int pos = atomicAdd(&wrong_saddle_counter, 1);
+                wrong_rank_saddle_join_index[pos * 2] = true_smallest;
+                wrong_rank_saddle_join_index[pos * 2 + 1] = saddle;
+                
+                wrong_rank_saddle[minId] = 1;
+                break;
+            }
         }
     }
+    
+    return;
+
 
 }
 
@@ -3052,7 +3330,9 @@ __global__ void fix_wrong_index_max(int direction = 0){
         double tmp_false_value = decp_data[false_index];
         // if(i == 0 && direction == 0) printf("%d: %.17f %.17f, %d: %.17f %.17f\n", true_index, decp_data[true_index], input_data[true_index], false_index, decp_data[false_index], input_data[false_index]);
         tmp_false_value = (input_data[false_index] - bound + decp_data[false_index]) / 2.0;
-        double d = tmp_false_value - decp_data[false_index];
+        int c = delta_counter[false_index] + 1;
+        double d = -bound / (q);
+        // double d = tmp_false_value - decp_data[false_index];
         
         double oldValue = d_deltaBuffer[false_index];
         
@@ -3070,7 +3350,9 @@ __global__ void fix_wrong_index_max(int direction = 0){
         double tmp_false_value = decp_data[false_index];
         
         tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
-        double d = tmp_true_value - decp_data[true_index];
+        int c = delta_counter[true_index] + 1;
+        double d = -bound / (q);
+        // double d = tmp_true_value - decp_data[true_index];
         
         double oldValue = d_deltaBuffer[true_index];
         
@@ -3096,8 +3378,9 @@ __global__ void fix_wrong_index_min(int direction = 0){
         double tmp_false_value = decp_data[false_index];
         
         tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
-        double d = tmp_true_value - decp_data[true_index];
-    
+        // double d = tmp_true_value - decp_data[true_index];
+        int c = delta_counter[true_index] + 1;
+        double d = -bound / (q);
         double oldValue = d_deltaBuffer[true_index];
         
         if (d > oldValue) {
@@ -3112,8 +3395,10 @@ __global__ void fix_wrong_index_min(int direction = 0){
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
         tmp_false_value = (input_data[false_index] - bound + decp_data[false_index]) / 2.0;
-        double d = tmp_false_value - decp_data[false_index];
-        printf("%d %d %.17f\n", false_index, true_index, d);
+        // double d = tmp_false_value - decp_data[false_index];
+        int c = delta_counter[false_index] + 1;
+        double d = -bound / (q);
+        // printf("%d %d %.17f\n", false_index, true_index, d);
         double oldValue = d_deltaBuffer[false_index];
         
         if (d > oldValue) {
@@ -3135,9 +3420,14 @@ __global__ void fix_wrong_index_saddle(int direction = 0){
        
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
+        // if(false_index == 537788 && true_index == 403383){
+        //     printf("%d\n", i);
+        // }
+        // printf("%d %d %.17f %.17f\n", true_index, false_index, tmp_true_value, tmp_false_value);
         if(tmp_true_value > tmp_false_value || (tmp_true_value == tmp_false_value && true_index > false_index)) return;
-    
-        double d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
+        int c = delta_counter[false_index] + 1;
+        double d = -bound / (q);
+        // double d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
         double oldValue = d_deltaBuffer[false_index];
         if (d > oldValue) {
             swap(false_index, d);
@@ -3152,8 +3442,9 @@ __global__ void fix_wrong_index_saddle(int direction = 0){
         double tmp_false_value = decp_data[false_index];
         // if(true_index == 5477) printf("%d: %.17f %.17f, %d: %.17f %.17f\n", true_index, decp_data[true_index], input_data[true_index], false_index, decp_data[false_index], input_data[false_index]);
         if(tmp_true_value < tmp_false_value || (tmp_true_value == tmp_false_value && true_index < false_index)) return;
-    
-        double d = (input_data[true_index] - bound + decp_data[true_index])/2.0 - decp_data[true_index];
+        int c = delta_counter[true_index] + 1;
+        double d = -bound / (q);
+        // double d = (input_data[true_index] - bound + decp_data[true_index])/2.0 - decp_data[true_index];
         double oldValue = d_deltaBuffer[true_index];
         if (d > oldValue) {
             swap(true_index, d);
@@ -3165,26 +3456,27 @@ __global__ void fix_wrong_index_saddle(int direction = 0){
 }
 
 void s_loops(dim3 gridSize, dim3 blockSize, dim3 gridSize_2saddle){
-        cudaMemcpyToSymbol(wrong_max_counter, &initialValue, sizeof(int));
-        cudaMemcpyToSymbol(wrong_max_counter_2, &initialValue, sizeof(int));
-        
-        init_buffer<<<gridSize, blockSize>>>();
-        get_wrong_index_max<<<gridSize_2saddle, blockSize>>>();
-        init_delta<<<gridSize, blockSize>>>();
+    cudaMemcpyToSymbol(wrong_max_counter, &initialValue, sizeof(int));
+    cudaMemcpyToSymbol(wrong_max_counter_2, &initialValue, sizeof(int));
+    
+    init_buffer<<<gridSize, blockSize>>>();
+    get_wrong_index_max<<<gridSize_2saddle, blockSize>>>();
+    init_delta<<<gridSize, blockSize>>>();
 
-        int host_wrong_max_counter = 0, host_wrong_max_counter_2 = 0;
-        cudaMemcpyFromSymbol(&host_wrong_max_counter, wrong_max_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
-        cudaMemcpyFromSymbol(&host_wrong_max_counter_2, wrong_max_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
+    host_wrong_max_counter = 0;
+    host_wrong_max_counter_2 = 0;
+    cudaMemcpyFromSymbol(&host_wrong_max_counter, wrong_max_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
+    cudaMemcpyFromSymbol(&host_wrong_max_counter_2, wrong_max_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
 
-        dim3 gridSize_wrong_max((host_wrong_max_counter + blockSize.x - 1) / blockSize.x);
-        dim3 gridSize_wrong_max_2((host_wrong_max_counter_2 + blockSize.x - 1) / blockSize.x);
-        
-        if(host_wrong_max_counter>0){
-            fix_wrong_index_max<<<gridSize_wrong_max, blockSize>>>(0);
-        }
+    dim3 gridSize_wrong_max((host_wrong_max_counter + blockSize.x - 1) / blockSize.x);
+    dim3 gridSize_wrong_max_2((host_wrong_max_counter_2 + blockSize.x - 1) / blockSize.x);
+    
+    if(host_wrong_max_counter>0){
+        fix_wrong_index_max<<<gridSize_wrong_max, blockSize>>>(0);
+    }
 
-        if(host_wrong_max_counter_2>0) fix_wrong_index_max<<<gridSize_wrong_max_2, blockSize>>>(1);
-        applyDeltaBuffer<<<gridSize, blockSize>>>();
+    if(host_wrong_max_counter_2>0) fix_wrong_index_max<<<gridSize_wrong_max_2, blockSize>>>(1);
+    applyDeltaBuffer<<<gridSize, blockSize>>>();
 }
 
 void s_loops_join(dim3 gridSize, dim3 blockSize, dim3 gridSize_1saddle){
@@ -3196,7 +3488,8 @@ void s_loops_join(dim3 gridSize, dim3 blockSize, dim3 gridSize_1saddle){
     
     init_delta<<<gridSize, blockSize>>>();
     
-    int host_wrong_min_counter = 0, host_wrong_min_counter_2 = 0;
+    host_wrong_min_counter = 0;
+    host_wrong_min_counter_2 = 0;
     cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&host_wrong_min_counter_2, wrong_min_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
     // std::cout<<host_wrong_min_counter<<", "<<host_wrong_min_counter_2<<std::endl;
@@ -3292,8 +3585,9 @@ __device__ void c_loop_local(int index, int direction = 0){
         double input_value = input_data[index];
         double decp_value = decp_data[index];
         if (vertex_type[index]!=4){
-            
-            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            int c = delta_counter[index] + 1;
+            double d = -bound / (q);
+            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             
             if (d > oldValue) {
@@ -3332,8 +3626,9 @@ __device__ void c_loop_local(int index, int direction = 0){
             if(decp_value>largest_value or(decp_value==largest_value and index>largest_index)){
                 return;
             }
-
-            double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
+            int c = delta_counter[largest_index] + 1;
+            double d = -bound / (q);
+            // double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
             
             double oldValue = d_deltaBuffer[largest_index];
             if (d > oldValue) {
@@ -3382,7 +3677,9 @@ __device__ void c_loop_local(int index, int direction = 0){
             //     }
             // }
             double decp_smallest_value = decp_data[smallest_index];
-            double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            int c = delta_counter[smallest_index] + 1;
+            double d = -bound / (q);
+            // double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
             if(decp_value>decp_smallest_value or (decp_value==decp_smallest_value and index>smallest_index)){
                 return;
             }
@@ -3395,7 +3692,9 @@ __device__ void c_loop_local(int index, int direction = 0){
         }
     
         else{
-            double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            int c = delta_counter[index] + 1;
+            double d = -bound / (q);
+            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             if (d > oldValue) {
                 swap(index, d);
@@ -3504,7 +3803,6 @@ __global__ void classifyVertex_CUDA(int type = 0, int local = 1) {
             int smem_y = ty + (newY - gy);
             int smem_z = tz + (newZ - gz);
             
-            
             double neighbor_value = smem[smem_x][smem_y][smem_z];
 
             if (neighbor_value < currentHeight || (neighbor_value == currentHeight && r < g_idx)) {
@@ -3551,28 +3849,13 @@ __global__ void classifyVertex_CUDA(int type = 0, int local = 1) {
     
     if(type==0){
         results[g_idx] = LUT_result;
-        
     }
+    
     else{
 
-        // if(host_count_f_min>0){
-        //     dim3 gridSize_fmin((host_count_f_min + blockSize.x - 1) / blockSize.x);
-        //     c_loop<<<gridSize_fmin, blockSize>>>(1);
-        //     cudaDeviceSynchronize();
-        // }
-                
-        // if(host_count_f_saddle>0 ){
-        //     dim3 gridSize_saddle((host_count_f_saddle + blockSize.x - 1) / blockSize.x);
-        //     c_loop<<<gridSize_saddle, blockSize>>>(2);
-        //     cudaDeviceSynchronize();
-        // }
-        
-        // if(host_count_f_max>0){
-        //     dim3 gridSize_fmax((host_count_f_max + blockSize.x - 1) / blockSize.x);
-        //     c_loop<<<gridSize_fmax, blockSize>>>(0);
-        //     cudaDeviceSynchronize();
-        // }
         int ori_type = vertex_type[g_idx];
+        int simplification_t = simplified[g_idx];
+        // printf("%.17f\n", bound / fabs(input_data[g_idx] - decp_data[g_idx]));
         if(LUT_result != ori_type){
                 // maximum
                 if((LUT_result==4 and ori_type!=4) or (LUT_result!=4 and ori_type==4)){
@@ -3643,6 +3926,7 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
     cudaDeviceSynchronize();
     classifyVertex_CUDA<<<gridDim1, blockDim1>>>(1, 0);
     cudaDeviceSynchronize();
+    
     // init_update<<<gridSize, blockSize>>>();
     // cudaDeviceSynchronize();
     // applyDeltaBuffer<<<gridSize, blockSize>>>();
@@ -3667,7 +3951,7 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
     cudaMemcpyFromSymbol(&host_count_f_saddle, count_f_saddle, sizeof(int), 0, cudaMemcpyDeviceToHost);
     int cnt = 0;
     while(host_count_f_max>0 or host_count_f_min>0 or host_count_f_saddle>0){
-        // std::cout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
+        std::cout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
         cnt++;
         start = std::chrono::high_resolution_clock::now();
 
@@ -3822,8 +4106,9 @@ __global__ void fixpath(int direction = 0){
                 return;
             }
             
-            
-            double d = ((input_data[false_index] - bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
+            int c = delta_counter[false_index] + 1;
+            double d = -bound / (q);
+            // double d = ((input_data[false_index] - bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
         
             double oldValue = d_deltaBuffer[false_index];
             if (d > oldValue) {
@@ -3898,8 +4183,9 @@ __global__ void fixpath(int direction = 0){
 
             if(false_index==true_index) return;
 
-            
-            double d = ((input_data[true_index] - bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
+            int c = delta_counter[true_index] + 1;
+            double d = -bound / (q);
+            // double d = ((input_data[true_index] - bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
             double oldValue = d_deltaBuffer[true_index];
             if (d > oldValue) {
                 swap(true_index, d);
@@ -3912,7 +4198,8 @@ __global__ void fixpath(int direction = 0){
     }
 
 
-void r_loops(dim3 gridSize, dim3 blockSize, int host_number_of_false_cases, int host_number_of_false_cases1){
+
+    void r_loops(dim3 gridSize, dim3 blockSize, int host_number_of_false_cases, int host_number_of_false_cases1){
         
     init_delta<<<gridSize, blockSize>>>();
     if(host_number_of_false_cases>0){
@@ -3934,10 +4221,10 @@ void r_loops(dim3 gridSize, dim3 blockSize, int host_number_of_false_cases, int 
 void saddle_loops(dim3 gridSize_max, dim3 gridSize, dim3 blockSize){
     cudaMemcpyToSymbol(wrong_saddle_counter, &initialValue, sizeof(int));
     init_saddle_rank_buffer<<<gridSize, blockSize>>>();
-    // get_wrong_index_saddles<<<gridSize_max, blockSize>>>();
+    get_wrong_index_saddles<<<gridSize_max, blockSize>>>(d_max_offsets, d_flattened_max2saddles);
     init_delta<<<gridSize, blockSize>>>();
     // std::cout<<wrong_saddle_counter<<std::endl;
-    int host_wrong_saddle_counter = 0;
+    host_wrong_saddle_counter = 0;
     cudaMemcpyFromSymbol(&host_wrong_saddle_counter, wrong_saddle_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
     
     dim3 gridSize_wrong_saddle((host_wrong_saddle_counter + blockSize.x - 1) / blockSize.x);
@@ -3950,9 +4237,9 @@ void saddle_loops(dim3 gridSize_max, dim3 gridSize, dim3 blockSize){
 void saddle_loops_join(dim3 gridSize_min, dim3 gridSize, dim3 blockSize){
     cudaMemcpyToSymbol(wrong_saddle_counter_join, &initialValue, sizeof(int));
     init_saddle_rank_buffer<<<gridSize, blockSize>>>(1);
-    // get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>();
+    get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>(d_min_offsets, d_flattened_min1saddles);
     init_delta<<<gridSize, blockSize>>>();
-    int host_wrong_saddle_counter_join = 0;
+    host_wrong_saddle_counter_join = 0;
     cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
     dim3 gridSize_wrong_saddle_join((host_wrong_saddle_counter_join + blockSize.x - 1) / blockSize.x);
 
@@ -3964,7 +4251,6 @@ void saddle_loops_join(dim3 gridSize_min, dim3 gridSize, dim3 blockSize){
 }
 
 double calculateMSE(const double* original, const double* compressed) {
-
 
     double mse = 0.0;
     for (size_t i = 0; i < num_Elements_host; i++) {
@@ -4015,127 +4301,368 @@ std::vector<uint8_t> encodeTo3BitBitmap(const std::vector<int>& data) {
     return bitmap;
 }
 
-void cost(std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter){
-        std::vector<int> indexs(num_Elements_host, 0);
-        std::vector<double> edits;
-        std::vector<unsigned long long> exponents;
-        std::vector<unsigned long long> mantissas;
 
-        int cnt = 0;
-        for (int i=0;i<num_Elements_host;i++){
-            if (decp_data_copy[i]!=decp_data[i]){
-                indexs[i] = delta_counter[i];
+template<typename T>
+std::vector<T> get_diff_index(std::vector<T> index){
+    std::vector<T> index_tmp;
+    index_tmp.push_back(index[0]);
+    for(int i = 1; i<index.size(); i++){
+        index_tmp.push_back(index[i] - index[i-1]);
+    }
+    return index_tmp;
+}
+
+template<typename T>
+size_t save_and_compress(const std::string& out_filename, const std::vector<T>& data, int compression_level = 3) {
+    // 原始数据大小
+    size_t data_size = data.size() * sizeof(T);
+    // 申请压缩缓冲区
+    size_t bound = ZSTD_compressBound(data_size);
+    std::vector<char> compressed(bound);
+
+    // 压缩
+    size_t compressed_size = ZSTD_compress(compressed.data(), bound, data.data(), data_size, compression_level);
+    if (ZSTD_isError(compressed_size)) {
+        std::cerr << "ZSTD compression error: " << ZSTD_getErrorName(compressed_size) << std::endl;
+        return 0;
+    }
+
+    // 写入压缩文件
+    std::ofstream ofs(out_filename, std::ios::binary);
+    ofs.write(compressed.data(), compressed_size);
+    ofs.close();
+    return compressed_size;
+}
+
+// void cost(std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter){
+//         std::vector<int> indexs;
+//         std::vector<int> indexs1;
+//         std::vector<int> indexs2;
+//         std::vector<int> indexs3;
+//         std::vector<int> indexs4;
+//         std::vector<int> indexs5;
+//         std::vector<int> indexs6;
+//         std::vector<int> indexs7;
+//         std::vector<int> indexs_lossless;
+//         std::vector<int> deltas;
+//         std::vector<double> edits;
+//         // std::vector<unsigned long long> exponents;
+//         // std::vector<unsigned long long> mantissas;
+//         std::vector<std::vector<int>> indexs_all;
+//         int cnt = 0;
+//         for (int i=0;i<num_Elements_host;i++){
+//             if (decp_data_copy[i]!=decp_data[i]){
+//                 int delta = delta_counter[i];
+//                 indexs.push_back(i);
+//                 // if(delta == 1) indexs1.push_back(i);
+//                 // if(delta == 2) indexs2.push_back(i);
+//                 // if(delta == 3) indexs3.push_back(i);
+//                 // if(delta == 4) indexs4.push_back(i);
+//                 // if(delta == 5) indexs5.push_back(i);
+//                 // if(delta == 6) indexs6.push_back(i);
+//                 // deltas.push_back(delta_counter[i]);
+//                 if(delta_counter[i]==-2){
+//                     edits.push_back(decp_data_copy[i] - (input_data[i] - host_bound));
+//                     // edits.push_back(input_data[i]);
+//                     indexs_lossless.push_back(i);
+//                     // edits.push_back((input_data[i] - host_bound));
+//                 }
+//                 cnt++;
+//             }
+//         }
+//         // indexs_all.push_back(get_diff_index(indexs));
+//         // indexs_all.push_back(get_diff_index(indexs1));
+//         // indexs_all.push_back(get_diff_index(indexs2));
+//         // indexs_all.push_back(get_diff_index(indexs3));
+//         // indexs_all.push_back(get_diff_index(indexs4));
+//         // indexs_all.push_back(get_diff_index(indexs5));
+//         // indexs_all.push_back(get_diff_index(indexs6));
+//         // get_diff_index(&index1);
+//         // get_diff_index(&index2);
+//         // get_diff_index(index3);
+//         // get_diff_index(index4);
+//         // get_diff_index(index5);
+//         // get_diff_index(index6);
+//         // get_diff_index(index7);
+//         // indexs = {index, index1, index2, index3, index4, index5, index6};
+        
+        
+//         std::vector<uint8_t> bitmap = encodeTo3BitBitmap(indexs);
+
+        
+//         std::string indexfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+std::to_string(host_bound)+".bin";
+//         std::string editsfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+std::to_string(host_bound)+".bin";
+//         std::string compressedindex = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+std::to_string(host_bound)+".bin.zst";
+//         std::string compressededits = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+std::to_string(host_bound)+".bin.zst";
+        
+//         // Shockwave, 64, 64, 512
+
+//         double ratio = double(cnt)/(num_Elements_host);
+//         std::cout<<cnt<<","<<ratio<<std::endl;
+//         std::uintmax_t compressed_indexSize = 0;
+//         std::uintmax_t original_indexSize = 0;
+//         std::string command;
+//         int result;
+//         // for(auto indexs_t:indexs_all){
+//         //     std::ofstream file(indexfilename, std::ios::binary | std::ios::out);
+//         //     if (file.is_open()) {
+//         //         file.write(reinterpret_cast<const char*>(indexs_t.data()), indexs_t.size());
+//         //         file.close();
+//         //     } else {
+//         //         std::cerr << "cannot open file: " << filename << " ." << std::endl;
+//         //     }
+            
+            
+//         //     command = "zstd -f " + indexfilename;
+//         //     std::cout << "Executing command: " << command << std::endl;
+//         //     result =  std::system(command.c_str());
+//         //     if (result == 0) {
                 
-                if(indexs[i]==7){
-                    // edits.push_back(-(decp_data_copy[i] - (input_data[i] - host_bound)));
-                    edits.push_back(input_data[i]);
-                    // edits.push_back((input_data[i] - host_bound));
-                }
-                cnt++;
-            }
-        }
+//         //         std::cout << "Compression successful." << std::endl;
+//         //     } else {
+//         //         std::cout << "Compression failed." << std::endl;
+//         //     }
+//         //     original_indexSize += std::filesystem::file_size(indexfilename);
+//         //     compressed_indexSize += std::filesystem::file_size(compressedindex);
+//         // }
         
-        
-        std::vector<uint8_t> bitmap = encodeTo3BitBitmap(indexs);
-
-        
-        std::string indexfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+std::to_string(host_bound)+".bin";
-        std::string editsfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+std::to_string(host_bound)+".bin";
-        std::string compressedindex = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+std::to_string(host_bound)+".bin.zst";
-        std::string compressededits = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+std::to_string(host_bound)+".bin.zst";
-        
-        // Shockwave, 64, 64, 512
-
-        double ratio = double(cnt)/(num_Elements_host);
-        std::cout<<cnt<<","<<ratio<<std::endl;
-
-        std::ofstream file(indexfilename, std::ios::binary | std::ios::out);
-        if (file.is_open()) {
-            file.write(reinterpret_cast<const char*>(bitmap.data()), bitmap.size());
-            file.close();
-        } else {
-            std::cerr << "cannot open file: " << filename << " ." << std::endl;
-        }
-        
-        std::string command;
-        command = "zstd -f " + indexfilename;
-        std::cout << "Executing command: " << command << std::endl;
-        int result = std::system(command.c_str());
-        if (result == 0) {
+//         if(indexs.size()>0){
+//             std::ofstream file(indexfilename, std::ios::binary | std::ios::out);
+//             if (file.is_open()) {
+//                 file.write(reinterpret_cast<const char*>(indexs.data()), indexs.size());
+//                 file.close();
+//             } else {
+//                 std::cerr << "cannot open file: " << filename << " ." << std::endl;
+//             }
             
-            std::cout << "Compression successful." << std::endl;
-        } else {
-            std::cout << "Compression failed." << std::endl;
-        }
-
-        std::ofstream file1(editsfilename, std::ios::binary | std::ios::out);
-        if (file1.is_open()) {
-            file1.write(reinterpret_cast<const char*>(edits.data()), edits.size()*sizeof(double));
-            file1.close();
-        } else {
-            std::cerr << "cannot open file: " << filename << " ." << std::endl;
-        }
-        
-        
-        command = "zstd -f " + editsfilename;
-        std::cout << "Executing command: " << command << std::endl;
-        result = std::system(command.c_str());
-        if (result == 0) {
             
-            std::cout << "Compression successful." << std::endl;
-        } else {
-            std::cout << "Compression failed." << std::endl;
-        }
+//             command = "zstd -f " + indexfilename;
+//             std::cout << "Executing command: " << command << std::endl;
+//             result =  std::system(command.c_str());
+//             if (result == 0) {
+                
+//                 std::cout << "Compression successful." << std::endl;
+//             } else {
+//                 std::cout << "Compression failed." << std::endl;
+//             }
+//             original_indexSize += std::filesystem::file_size(indexfilename);
+//             compressed_indexSize += std::filesystem::file_size(compressedindex);
+//         }
+        
+        
+//         std::vector<uint64_t> mantissas;
+//         std::vector<int> exponents;
+
+//         for (double val : edits) {
+//             uint64_t bits;
+//             std::memcpy(&bits, &val, sizeof(double));
+//             int sign = (bits >> 63) & 0x1;
+//             int exp_raw = (bits >> 52) & 0x7FF;  // 11 bits
+//             uint64_t mant = bits & 0xFFFFFFFFFFFFF; // 52 bits
+//             // std::cout<<bits<<","<<mant<<std::endl;
+//             int unbiased_exp = exp_raw - 1023;
+//             mantissas.push_back(mant);
+//             exponents.push_back(unbiased_exp);
+//         }
+
+//         // std::vector<uint64_t> mantissas_diff = get_diff_index(mantissas);
+//         // std::vector<int> exponents_diff = get_diff_index(exponents);
+        
+//         // size_t mantissas_size = save_and_compress("mantissa.bin", mantissas);
+//         // size_t exponents_size = save_and_compress("exponent.bin", exponents);
+
+
+        
+//         std::ofstream file1(editsfilename, std::ios::binary | std::ios::out);
+//         if (file1.is_open()) {
+//             file1.write(reinterpret_cast<const char*>(edits.data()), edits.size()*sizeof(double));
+//             file1.close();
+//         } else {
+//             std::cerr << "cannot open file: " << filename << " ." << std::endl;
+//         }
+        
+        
+//         command = "zstd -f " + editsfilename;
+//         std::cout << "Executing command: " << command << std::endl;
+//         result = std::system(command.c_str());
+//         if (result == 0) {
+            
+//             std::cout << "Compression successful." << std::endl;
+//         } else {
+//             std::cout << "Compression failed." << std::endl;
+//         }
        
 
     
         
-        std::uintmax_t compressed_indexSize = std::filesystem::file_size(compressedindex);
-        std::uintmax_t compressed_editSize =std::filesystem::file_size(compressededits);
-        std::uintmax_t original_indexSize = std::filesystem::file_size(indexfilename);
-        std::uintmax_t original_editSize = std::filesystem::file_size(editsfilename);
-        std::uintmax_t original_dataSize = std::filesystem::file_size(file_path);
-        std::uintmax_t compressed_dataSize = cmpSize;
-        std::cout<<"compressed datasize:"<<cmpSize<<std::endl;
+        
+//         std::uintmax_t compressed_editSize =std::filesystem::file_size(compressededits);
+        
+//         std::uintmax_t original_editSize = std::filesystem::file_size(editsfilename);
+//         std::uintmax_t original_dataSize = std::filesystem::file_size(file_path);
+//         std::uintmax_t compressed_dataSize = cmpSize;
+//         std::cout<<"compressed datasize:"<<cmpSize<<std::endl;
+//         std::cout<<"compressed editssize:"<<compressed_editSize<<std::endl;
+//         // std::cout<<"compressed editssize_1:"<<mantissas_size<<", "<<exponents_size<<std::endl;
 
-        double overall_ratio = double(original_dataSize)/(compressed_dataSize+compressed_editSize+compressed_indexSize);
+//         double overall_ratio = double(original_dataSize)/(compressed_dataSize+compressed_editSize+compressed_indexSize);
     
-        double bitRate = 64/overall_ratio; 
+//         double bitRate = 64/overall_ratio; 
 
-        double psnr = calculatePSNR(input_data, decp_data_copy, maxValue-minValue);
-        double fixed_psnr = calculatePSNR(input_data, decp_data, maxValue-minValue);
+//         double psnr = calculatePSNR(input_data, decp_data_copy, maxValue-minValue);
+//         double fixed_psnr = calculatePSNR(input_data, decp_data, maxValue-minValue);
 
-        std::ofstream outFile3("../stat_result/result_"+filename+"_"+compressor_id+"_detailed_additional_time.txt", std::ios::app);
+//         std::ofstream outFile3("../stat_result/result_"+filename+"_"+compressor_id+"_detailed_additional_time.txt", std::ios::app);
 
         
-        if (!outFile3) {
-            std::cerr << "Unable to open file for writing." << std::endl;
-            return; // 返回错误码
+//         if (!outFile3) {
+//             std::cerr << "Unable to open file for writing." << std::endl;
+//             return; // 返回错误码
+//         }
+
+        
+//         outFile3 << std::to_string(host_bound)<<":" << std::endl;
+//         outFile3 << std::setprecision(17)<< "related_error: "<<er << std::endl;
+//         outFile3 << std::setprecision(17)<< "absolute_error: "<<host_bound << std::endl;
+//         outFile3 << std::setprecision(17)<< "OCR: "<<overall_ratio << std::endl;
+//         outFile3 <<std::setprecision(17)<< "CR: "<<double(original_dataSize)/compressed_dataSize << std::endl;
+//         outFile3 << std::setprecision(17)<<"OBR: "<<bitRate << std::endl;
+//         outFile3 << std::setprecision(17)<<"BR: "<< 64/(double(original_indexSize)/compressed_dataSize) << std::endl;
+//         outFile3 << std::setprecision(17)<<"psnr: "<<psnr << std::endl;
+//         outFile3 << std::setprecision(17)<<"fixed_psnr: "<<fixed_psnr << std::endl;
+        
+
+        
+//         outFile3 << std::setprecision(17)<<"edit_ratio: "<<ratio << std::endl;
+//         // outFile3 << std::setprecision(17)<<"compression_time: "<<compression_time<< std::endl;
+//         // outFile3 << std::setprecision(17)<<"additional_time: "<<additional_time<< std::endl;
+//         outFile3 << "\n" << std::endl;
+
+//         outFile3.close();
+
+//         std::cout << "Variables have been appended to output.txt" << std::endl;
+//         return;
+// };
+
+void cost(std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter){
+    std::vector<int> indexs(num_Elements_host, 0);
+    std::vector<double> edits;
+    std::vector<unsigned long long> exponents;
+    std::vector<unsigned long long> mantissas;
+
+    int cnt = 0;
+    for (int i=0;i<num_Elements_host;i++){
+        if (decp_data_copy[i]!=decp_data[i]){
+            indexs[i] = delta_counter[i];
+            if(indexs[i] == threshold_host){
+                edits.push_back(-(decp_data_copy[i] - (input_data[i] - host_bound)));
+            }
+            cnt++;
         }
+    }
+    
+    
+    std::vector<uint8_t> bitmap = encodeTo3BitBitmap(indexs);
 
+    
+    std::string indexfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+".bin";
+    std::string editsfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+".bin";
+    std::string compressedindex = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+".bin.zst";
+    std::string compressededits = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+".bin.zst";
+    
+    // Shockwave, 64, 64, 512
+
+    double ratio = double(cnt)/(num_Elements_host);
+    std::cout<<cnt<<","<<ratio<<std::endl;
+
+    std::ofstream file(indexfilename, std::ios::binary | std::ios::out);
+    if (file.is_open()) {
+        file.write(reinterpret_cast<const char*>(indexs.data()), indexs.size());
+        file.close();
+    } else {
+        std::cerr << "cannot open file: " << filename << " ." << std::endl;
+    }
+    
+    std::string command;
+    command = "zstd -f " + indexfilename;
+    std::cout << "Executing command: " << command << std::endl;
+    int result = std::system(command.c_str());
+    if (result == 0) {
         
-        outFile3 << std::to_string(host_bound)<<":" << std::endl;
-        outFile3 << std::setprecision(17)<< "related_error: "<<er << std::endl;
-        outFile3 << std::setprecision(17)<< "absolute_error: "<<host_bound << std::endl;
-        outFile3 << std::setprecision(17)<< "OCR: "<<overall_ratio << std::endl;
-        outFile3 <<std::setprecision(17)<< "CR: "<<double(original_dataSize)/compressed_dataSize << std::endl;
-        outFile3 << std::setprecision(17)<<"OBR: "<<bitRate << std::endl;
-        outFile3 << std::setprecision(17)<<"BR: "<< 64/(double(original_indexSize)/compressed_dataSize) << std::endl;
-        outFile3 << std::setprecision(17)<<"psnr: "<<psnr << std::endl;
-        outFile3 << std::setprecision(17)<<"fixed_psnr: "<<fixed_psnr << std::endl;
+        std::cout << "Compression successful." << std::endl;
+    } else {
+        std::cout << "Compression failed." << std::endl;
+    }
+
+    std::ofstream file1(editsfilename, std::ios::binary | std::ios::out);
+    if (file1.is_open()) {
+        file1.write(reinterpret_cast<const char*>(edits.data()), edits.size()*sizeof(double));
+        file1.close();
+    } else {
+        std::cerr << "cannot open file: " << filename << " ." << std::endl;
+    }
+    
+    
+    command = "zstd -f " + editsfilename;
+    std::cout << "Executing command: " << command << std::endl;
+    result = std::system(command.c_str());
+    if (result == 0) {
         
+        std::cout << "Compression successful." << std::endl;
+    } else {
+        std::cout << "Compression failed." << std::endl;
+    }
 
-        
-        outFile3 << std::setprecision(17)<<"edit_ratio: "<<ratio << std::endl;
-        // outFile3 << std::setprecision(17)<<"compression_time: "<<compression_time<< std::endl;
-        // outFile3 << std::setprecision(17)<<"additional_time: "<<additional_time<< std::endl;
-        outFile3 << "\n" << std::endl;
+    std::uintmax_t compressed_editSize = std::filesystem::file_size(compressededits);
+    std::uintmax_t compressed_indexSize = std::filesystem::file_size(compressedindex);
+    std::uintmax_t original_editSize = std::filesystem::file_size(editsfilename);
+    std::uintmax_t original_dataSize = std::filesystem::file_size(file_path);
+    std::uintmax_t compressed_dataSize = cmpSize;
+    std::uintmax_t original_indexSize = std::filesystem::file_size(indexfilename);
+    
+    
+    
+   
+    
+    double overall_ratio = double(original_dataSize)/(compressed_dataSize+compressed_editSize+compressed_indexSize);
+   
+    double bitRate = 64/overall_ratio; 
 
-        outFile3.close();
+    double psnr = calculatePSNR(input_data, decp_data_copy, maxValue-minValue);
+    double fixed_psnr = calculatePSNR(input_data, decp_data, maxValue-minValue);
 
-        std::cout << "Variables have been appended to output.txt" << std::endl;
-        return;
-};
+    // std::ofstream outFile3("./stat_result/result_"+filename+"_"+compressor_id+"_detailed_additional_time.txt", std::ios::app);
+    std::ofstream outFile3("../stat_result/result_"+filename+"_"+compressor_id+"_q.txt", std::ios::app);
+    
+    if (!outFile3) {
+        std::cerr << "Unable to open file for writing." << std::endl;
+        return; // 返回错误码
+    }
+
+    outFile3 << std::to_string(host_bound)<<":" << std::endl;
+    outFile3 << std::setprecision(17)<< "related_error: "<<er << std::endl;
+    outFile3 << std::setprecision(17)<< "absolute_error: "<<host_bound << std::endl;
+    outFile3 << std::setprecision(17)<< "OCR: "<<overall_ratio << std::endl;
+    outFile3 << "threshold: "<< threshold_host << std::endl;
+    outFile3 <<std::setprecision(17)<< "CR: "<<double(original_dataSize)/compressed_dataSize << std::endl;
+    outFile3 << std::setprecision(17)<<"OBR: "<<bitRate << std::endl;
+    outFile3 << std::setprecision(17)<<"BR: "<< 64/(double(original_indexSize)/compressed_dataSize) << std::endl;
+    outFile3 << std::setprecision(17)<<"psnr: "<<psnr << std::endl;
+    outFile3 << std::setprecision(17)<<"fixed_psnr: "<<fixed_psnr << std::endl;
+    
+
+    
+    outFile3 << std::setprecision(17)<<"edit_ratio: "<<ratio << std::endl;
+    outFile3 << std::setprecision(17)<<"compression_time: "<<compression_time<< std::endl;
+    outFile3 << std::setprecision(17)<<"additional_time: "<<additional_time<< std::endl;
+    outFile3 << "\n" << std::endl;
+
+    
+    outFile3.close();
+
+    std::cout << "Variables have been appended to output.txt" << std::endl;
+    return;
+}
 
 void checkCudaError(cudaError_t err, const char* msg) {
     if (err != cudaSuccess) {
@@ -4143,6 +4670,144 @@ void checkCudaError(cudaError_t err, const char* msg) {
         exit(EXIT_FAILURE);
     }
 }
+
+void computeMax_saddle_table(){
+    // 假设你原有的数据结构是：saddleTriplets_t[saddle * 46 + p]
+    // 构建max到saddle的反向映射
+    std::vector<std::vector<int>> max2saddles(nMax_host);
+    for(int i = 0; i < nSaddle2_host; i++) {
+        const int saddle = saddleTriplets_d[i * 46 + 45];
+        int numMaxConnected = saddleTriplets_d[i * 46 + 44];
+        for(int p = 0; p < numMaxConnected; p++) {
+            const int max = max_index_d[saddleTriplets_d[i * 46 + p]];
+            max2saddles[max].push_back(saddle);
+        }
+    }
+
+    // 转换为offset形式，便于GPU快速访问
+    std::vector<int> max_offsets(nMax_host + 1, 0);
+    for(int i = 0; i < nMax_host; ++i) {
+        max_offsets[i + 1] = max_offsets[i] + max2saddles[i].size();
+    }
+    std::vector<int> flattened_max2saddles(max_offsets[nMax_host]);
+    for(int i = 0; i < nMax_host; ++i) {
+        std::copy(max2saddles[i].begin(), max2saddles[i].end(),
+                flattened_max2saddles.begin() + max_offsets[i]);
+    }
+    
+
+    // offsets数组
+    cudaMalloc(&d_max_offsets, (nMax_host + 1) * sizeof(int));
+    // flattened数组
+    cudaMalloc(&d_flattened_max2saddles, flattened_max2saddles.size() * sizeof(int));
+
+    // 将max_offsets, flattened_max2saddles复制到GPU
+    cudaMemcpy(d_max_offsets, max_offsets.data(),
+           (nMax_host + 1) * sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaMemcpy(d_flattened_max2saddles, flattened_max2saddles.data(),
+    flattened_max2saddles.size() * sizeof(int), cudaMemcpyHostToDevice);
+
+    // cudaMemcpyToSymbol(flattened_max2saddles, &d_flattened_max2saddles, sizeof(int*));
+    // cudaMemcpyToSymbol(max_offsets, &d_max_offsets, sizeof(int*));
+
+}
+
+void computeMin_saddle_table(){
+
+    std::vector<std::vector<int>> max2saddles(nMin_host);
+    int c = 0;
+    for(int i = 0; i < nSaddle1_host; i++) {
+        const int saddle = saddle1Triplets_d[i * 46 + 45];
+        int numMaxConnected = saddle1Triplets_d[i * 46 + 44];
+        for(int p = 0; p < numMaxConnected; p++) {
+            
+            const int max = max_index_d[saddle1Triplets_d[i * 46 + p]];
+            // if(saddle1Triplets_d[i*46 + p] == 538061) {
+            //     c = max;
+            //     // printf("saddle is: %d %d\n", saddle, max);
+            // }
+            max2saddles[max].push_back(saddle);
+        }
+    }
+
+    std::vector<int> max_offsets(nMin_host + 1, 0);
+    for(int i = 0; i < nMin_host; ++i) {
+        max_offsets[i + 1] = max_offsets[i] + max2saddles[i].size();
+    }
+
+    std::vector<int> flattened_min1saddles(max_offsets[nMin_host]);
+    for(int i = 0; i < nMin_host; ++i) {
+        // if(i == c){
+        //     for(int i:max2saddles[i]) std::cout<<i<<std::endl;
+        // }
+        std::copy(max2saddles[i].begin(), max2saddles[i].end(), flattened_min1saddles.begin() + max_offsets[i]);
+    }
+
+    // offsets数组 
+    // flattened数组 
+    // 将max_offsets, flattened_max2saddles复制到GPU 
+    // 转换为offset形式，便于GPU快速访问
+    cudaMalloc(&d_min_offsets, (nMin_host + 1) * sizeof(int));
+    cudaMalloc(&d_flattened_min1saddles, flattened_min1saddles.size() * sizeof(int));
+
+    cudaMemcpy(d_min_offsets, max_offsets.data(), (nMin_host + 1) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_flattened_min1saddles, flattened_min1saddles.data(), flattened_min1saddles.size() * sizeof(int), cudaMemcpyHostToDevice);
+}
+
+__global__ void findLargestSaddlePerMax(
+    const int* __restrict__ d_max_offsets,
+    const int* __restrict__ d_flattened_max2saddles
+) {
+    int max_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (max_id >= nMax) return;
+
+    int start = d_max_offsets[max_id];
+    int end = d_max_offsets[max_id + 1];
+
+    double max_val = -1e308;
+    int best_saddle = -1;
+    int maxId = maximum[max_id];
+    for (int i = start; i < end; ++i) {
+        int saddle = d_flattened_max2saddles[i];
+        double val = input_data[saddle];
+
+        if (val > max_val || (val == max_val && saddle > best_saddle)){
+            max_val = val;
+            best_saddle = saddle;
+        }
+    }
+
+    largestSaddlesForMax[max_id] = best_saddle;
+}
+
+__global__ void findSmallestSaddlePerMin(
+    const int* __restrict__ d_min_offsets,
+    const int* __restrict__ d_flattened_min1saddles
+) {
+    int min_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (min_id >= nMin) return;
+
+    int start = d_min_offsets[min_id];
+    int end = d_min_offsets[min_id + 1];
+
+    double max_val = 1e308;
+    int best_saddle = -1;
+    int minId = minimum[min_id];
+    for (int i = start; i < end; ++i) {
+        int saddle = d_flattened_min1saddles[i];
+        double val = input_data[saddle];
+
+        if (val < max_val || (val == max_val && saddle < best_saddle)){
+            max_val = val;
+            best_saddle = saddle;
+        }
+    }
+
+    smallestSaddlesForMin[min_id] = best_saddle;
+}
+
+
 
 int main(int argc, char** argv){
     std::cout<<LUT_SIZE<<std::endl;
@@ -4152,7 +4817,7 @@ int main(int argc, char** argv){
     er = std::stod(argv[2]);
     std::string compressor_id = argv[3];
     host_sim = std::stod(argv[4]);
-
+    q_host = std::stoi(argv[5]);
     
     std::istringstream iss(dimension);
     char delimiter;
@@ -4193,20 +4858,28 @@ int main(int argc, char** argv){
     
     
     cudaMemcpyToSymbol(d_deltaBuffer, &d_deltaBuffer_host, sizeof(double*));
-    
-    getdata(file_path, input_data_host, decp_data_host, decp_data_copy,
-            er, host_bound, num_Elements_host);
     float elapsedTime = 0.0;
     cudaEvent_t startt, stop, start;
     cudaEventCreate(&startt);
     cudaEventCreate(&stop);
     cudaEventCreate(&start);
     cudaEventRecord(startt, 0);
+
+    getdata(file_path, input_data_host, decp_data_host, decp_data_copy,
+            er, host_bound, num_Elements_host);
+    cudaEventRecord(stop, 0);
+    compression_time = elapsedTime/1000;
+    threshold_host = q_host;
+    checkCudaError(cudaMemcpyToSymbol(q, &q_host, sizeof(int), 0, cudaMemcpyHostToDevice), "persistence1");
+    checkCudaError(cudaMemcpyToSymbol(threshold, &threshold_host, sizeof(int), 0, cudaMemcpyHostToDevice), "persistence1");
+    
+    
+    cudaEventRecord(startt, 0);
     int *dec_vertex_type_host, *vertex_type_host, *vertex_cells_host, *delta_counter_host,
         *DS_M_host, *AS_M_host, *dec_DS_M_host, *dec_AS_M_host, *lowerStars_host, *dec_lowerStars_host,
         *upperStars_host, *dec_upperStars_host, *adjacency_host, *minimum_host, *dec_minimum_host, *maximum_host, *dec_maximum_host,
-        *saddles1_host, *dec_saddles1_host, *saddles2_host, *dec_saddles2_host, *reachable_saddle_for_Max_host, *dec_reachable_saddle_for_Max_host, *max_index_host, 
-        *reachable_saddle_for_Min_host, *dec_reachable_saddle_for_Min_host;
+        *saddles1_host, *dec_saddles1_host, *saddles2_host, *dec_saddles2_host, *reachable_saddle_for_Max_host, *dec_reachable_saddle_for_Max_host, *max_index_host, *saddle_index_host, *saddle1_index_host, 
+        *reachable_saddle_for_Min_host, *dec_reachable_saddle_for_Min_host, *simplified_host;
     
     int *or_saddle_max_map_host, *wrong_neighbors_host, *wrong_neighbors1_host, *wrong_neighbors_index_host, *wrong_rank_max_host, *wrong_rank_max_index_host, *wrong_rank_saddle_host, *wrong_rank_saddle_index_host, *wrong_rank_max_2_host, *wrong_rank_max_index_2_host;
     int *or_saddle_min_map_host, *wrong_neighbors_ds_host, *wrong_neighbors_ds_index_host, *wrong_rank_min_host, *wrong_rank_min_index_host, *wrong_rank_min_2_host, *wrong_rank_min_index_2_host;
@@ -4226,6 +4899,7 @@ int main(int argc, char** argv){
     cudaMalloc(&AS_M_host, num_Elements_host * sizeof(int));
     cudaMalloc(&dec_DS_M_host, num_Elements_host * sizeof(int));
     cudaMalloc(&dec_AS_M_host, num_Elements_host * sizeof(int));
+    cudaMalloc(&simplified_host, num_Elements_host * sizeof(int));
     
     cudaMalloc(&wrong_neighbors_host, num_Elements_host * sizeof(int));
     cudaMalloc(&wrong_neighbors_index_host, num_Elements_host * sizeof(int));
@@ -4270,6 +4944,7 @@ int main(int argc, char** argv){
     cudaMemset(AS_M_host, -1,  num_Elements_host * sizeof(int));
     cudaMemset(dec_DS_M_host, -1,  num_Elements_host * sizeof(int));
     cudaMemset(dec_AS_M_host, -1,  num_Elements_host * sizeof(int));
+    cudaMemset(simplified_host, -1,  num_Elements_host * sizeof(int));
     
     cudaMemset(wrong_neighbors_host, -1,  num_Elements_host * sizeof(int));
     cudaMemset(updated_vertex_host, -1,  num_Elements_host * sizeof(int));
@@ -4320,6 +4995,8 @@ int main(int argc, char** argv){
     cudaMemcpyToSymbol(dec_AS_M, &dec_AS_M_host, sizeof(int*));
     cudaMemcpyToSymbol(lowerStars, &lowerStars_host, sizeof(int*));
     cudaMemcpyToSymbol(upperStars, &upperStars_host, sizeof(int*));
+    cudaMemcpyToSymbol(simplified, &simplified_host, sizeof(int*));
+
     // cudaMemcpyToSymbol(dec_lowerStars, &dec_lowerStars_host, sizeof(int*));
     // cudaMemcpyToSymbol(dec_upperStars, &dec_upperStars_host, sizeof(int*));
     // cudaMemcpyToSymbol(adjacency, &adjacency_host, sizeof(int*));
@@ -4489,19 +5166,18 @@ int main(int argc, char** argv){
     
     ComputeAscendingManifold<<<gridSize, blockSize>>>(0);
     cudaDeviceSynchronize();
+
     
     ExtractCP<<<gridSize, blockSize>>>();
     cudaDeviceSynchronize();
     
-    int nSaddle2_host = 0;
-    int nMin_host = 0;
-    int nMax_host = 0;
-    int nSaddle1_host = 0;
+    
 
     cudaMemcpyFromSymbol(&nSaddle2_host, nSaddle2, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&nSaddle1_host, nSaddle1, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&nMax_host, nMax, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&nMin_host, nMin, sizeof(int), 0, cudaMemcpyDeviceToHost);
+    
     cudaDeviceSynchronize();
     std::cout<<nSaddle2_host<< ", "<<nSaddle1_host<<", "<<nMax_host<<", "<<nMin_host<<std::endl;
     // return 0;
@@ -4520,6 +5196,8 @@ int main(int argc, char** argv){
     cudaMalloc(&dec_saddleTriplets_host, nSaddle2_host * 46 * sizeof(int));
     cudaMalloc(&saddle1Triplets_host, nSaddle1_host * 46 * sizeof(int));
     cudaMalloc(&dec_saddle1Triplets_host, nSaddle1_host * 46 * sizeof(int));
+    cudaMalloc(&saddle_index_host, num_Elements_host * sizeof(int));
+    cudaMalloc(&saddle1_index_host, num_Elements_host * sizeof(int));
 
     cudaMalloc(&dec_saddlerank_host, nSaddle2_host * sizeof(int));
     cudaMalloc(&saddlerank_host, nSaddle2_host * sizeof(int));
@@ -4537,10 +5215,10 @@ int main(int argc, char** argv){
     // cudaMalloc(&dec_tempArray_host, num_Elements_host * sizeof(int));
     // cudaMalloc(&tempArrayMin_host, num_Elements_host * sizeof(int));
     // cudaMalloc(&dec_tempArrayMin_host, num_Elements_host * sizeof(int));
-    // cudaMalloc(&largestSaddlesForMax_host, nMax_host * sizeof(int));
-    // cudaMalloc(&dec_largestSaddlesForMax_host, nMax_host * sizeof(int));
-    // cudaMalloc(&smallestSaddlesForMin_host, nMin_host * sizeof(int));
-    // cudaMalloc(&dec_smallestSaddlesForMin_host, nMin_host * sizeof(int));
+    cudaMalloc(&largestSaddlesForMax_host, nMax_host * sizeof(int));
+    cudaMalloc(&dec_largestSaddlesForMax_host, nMax_host * sizeof(int));
+    cudaMalloc(&smallestSaddlesForMin_host, nMin_host * sizeof(int));
+    cudaMalloc(&dec_smallestSaddlesForMin_host, nMin_host * sizeof(int));
 
     // cudaMemset(dec_saddlerank_host, -1, nSaddle2_host * sizeof(int));
     // cudaMemset(saddlerank_host, -1, nSaddle2_host *  sizeof(int));
@@ -4554,10 +5232,10 @@ int main(int argc, char** argv){
     // cudaMemset(tempArrayMin_host, -1, num_Elements_host * sizeof(int));
     // cudaMemset(dec_tempArrayMin_host, -1, num_Elements_host * sizeof(int));
     
-    // cudaMemset(largestSaddlesForMax_host,-1, nMax_host * sizeof(int));
-    // cudaMemset(dec_largestSaddlesForMax_host, -1,nMax_host * sizeof(int));
-    // cudaMemset(smallestSaddlesForMin_host,-1, nMin_host * sizeof(int));
-    // cudaMemset(dec_smallestSaddlesForMin_host, -1, nMin_host * sizeof(int));
+    cudaMemset(largestSaddlesForMax_host,-1, nMax_host * sizeof(int));
+    cudaMemset(dec_largestSaddlesForMax_host, -1,nMax_host * sizeof(int));
+    cudaMemset(smallestSaddlesForMin_host,-1, nMin_host * sizeof(int));
+    cudaMemset(dec_smallestSaddlesForMin_host, -1, nMin_host * sizeof(int));
 
     cudaMemset(reachable_saddle_for_Max_host, 0, 45 * nMax_host * sizeof(int));
     cudaMemset(dec_reachable_saddle_for_Max_host, 0, 45 * nMax_host * sizeof(int));
@@ -4566,6 +5244,8 @@ int main(int argc, char** argv){
     cudaMemset(dec_reachable_saddle_for_Min_host, 0, 45 * nMin_host * sizeof(int));
 
     checkCudaError(cudaMemset(max_index_host, 0, num_Elements_host * sizeof(int)), "error");
+    cudaMemset(saddle_index_host, 0, num_Elements_host * sizeof(int));
+    cudaMemset(saddle1_index_host, 0, num_Elements_host * sizeof(int));
 
     cudaMemcpyToSymbol(saddleTriplets, &saddleTriplets_host, sizeof(int*));
     cudaMemcpyToSymbol(dec_saddleTriplets, &dec_saddleTriplets_host, sizeof(int*));
@@ -4579,16 +5259,18 @@ int main(int argc, char** argv){
     cudaMemcpyToSymbol(dec_reachable_saddle_for_Min, &dec_reachable_saddle_for_Min_host, sizeof(int*));
 
     cudaMemcpyToSymbol(max_index, &max_index_host, sizeof(int*));
+    cudaMemcpyToSymbol(saddle_index, &saddle_index_host, sizeof(int*));
+    cudaMemcpyToSymbol(saddle1_index, &saddle1_index_host, sizeof(int*));
     // cudaMemset(reachable_saddle_for_Max_host, -1, nSaddle2_host * nMax_host * sizeof(int));
     // cudaMemcpyToSymbol(tempArray, &tempArray_host, sizeof(int*));
     // cudaMemcpyToSymbol(dec_tempArray, &dec_tempArray_host, sizeof(int*));
     // cudaMemcpyToSymbol(tempArrayMin, &tempArrayMin_host, sizeof(int*));
     // cudaMemcpyToSymbol(dec_tempArrayMin, &dec_tempArrayMin_host, sizeof(int*));
 
-    // cudaMemcpyToSymbol(largestSaddlesForMax, &largestSaddlesForMax_host, sizeof(int*));
-    // cudaMemcpyToSymbol(dec_largestSaddlesForMax, &dec_largestSaddlesForMax_host, sizeof(int*));
-    // cudaMemcpyToSymbol(smallestSaddlesForMin, &smallestSaddlesForMin_host, sizeof(int*));
-    // cudaMemcpyToSymbol(dec_smallestSaddlesForMin, &dec_smallestSaddlesForMin_host, sizeof(int*));
+    cudaMemcpyToSymbol(largestSaddlesForMax, &largestSaddlesForMax_host, sizeof(int*));
+    cudaMemcpyToSymbol(dec_largestSaddlesForMax, &dec_largestSaddlesForMax_host, sizeof(int*));
+    cudaMemcpyToSymbol(smallestSaddlesForMin, &smallestSaddlesForMin_host, sizeof(int*));
+    cudaMemcpyToSymbol(dec_smallestSaddlesForMin, &dec_smallestSaddlesForMin_host, sizeof(int*));
 
     // cudaMemcpyToSymbol(dec_saddlerank, &dec_saddlerank_host, sizeof(int*));
     // cudaMemcpyToSymbol(saddlerank, &saddlerank_host, sizeof(int*));
@@ -4607,15 +5289,49 @@ int main(int argc, char** argv){
     //         nSaddle1_host, nSaddle2_host);
     // ComputeTempArray<<<gridSize_max, blockSize>>>(1, 1);
     // ComputeTempArray<<<gridSize_min, blockSize>>>(0, 1);
-    // computeMaxIndex<<<gridSize_max, blockSize>>>();
-    // cudaDeviceSynchronize();
-    // computeMinIndex<<<gridSize_min, blockSize>>>();
-    // cudaDeviceSynchronize();
+    computeMaxIndex<<<gridSize_max, blockSize>>>();
+    cudaDeviceSynchronize();
+    computeMinIndex<<<gridSize_min, blockSize>>>();
+    cudaDeviceSynchronize();
+    computeSaddleIndex<<<gridSize_2saddle, blockSize>>>();
+    cudaDeviceSynchronize();
+    computeSaddle1Index<<<gridSize_1saddle, blockSize>>>();
+    cudaDeviceSynchronize();
+
     
     findAscPaths<<<gridSize_2saddle, blockSize>>>(1);
     cudaDeviceSynchronize();
+
     findDescPaths<<<gridSize_1saddle, blockSize>>>(1);
     cudaDeviceSynchronize();
+    
+    saddleTriplets_d.resize(nSaddle2_host * 46);
+    cudaMemcpy(saddleTriplets_d.data(), saddleTriplets_host, nSaddle2_host * 46 * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+
+    saddle1Triplets_d.resize(nSaddle1_host * 46);
+    cudaMemcpy(saddle1Triplets_d.data(), saddle1Triplets_host, nSaddle1_host * 46 * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+    
+    max_index_d.resize(num_Elements_host);
+    cudaMemcpy(max_index_d.data(), max_index_host, num_Elements_host  * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+
+    computeMax_saddle_table();
+    cudaDeviceSynchronize();
+    computeMin_saddle_table();
+    cudaDeviceSynchronize();
+
+    findLargestSaddlePerMax<<<gridSize_max, blockSize>>>(d_max_offsets, d_flattened_max2saddles);
+    // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>();
+    cudaDeviceSynchronize();
+    findSmallestSaddlePerMin<<<gridSize_min, blockSize>>>(d_min_offsets, d_flattened_min1saddles);
+    // computelargestSaddlesForMax<<<gridSize_max, blockSize>>>();
+    cudaDeviceSynchronize();
+    
+    
+
+    
     
     // sortTripletsOnGPU(saddleTriplets_host, nSaddle2_host, input_data_host);
     // sortTripletsOnGPU(saddle1Triplets_host, nSaddle1_host, input_data_host);
@@ -4624,7 +5340,15 @@ int main(int argc, char** argv){
     // cudaDeviceSynchronize();
     // computesmallestSaddlesForMin<<<gridSize_min, blockSize>>>();
     // cudaDeviceSynchronize();
-    // return 0;
+    // find_canceled_max<<<gridSize_max, blockSize>>>(d_max_offsets, d_flattened_max2saddles);
+    // cudaDeviceSynchronize();
+    // find_canceled_min<<<gridSize_min, blockSize>>>(d_min_offsets, d_flattened_min1saddles);
+    // cudaDeviceSynchronize();
+    // find_canceled_saddles<<<gridSize_1saddle, blockSize>>>(input_data_host);
+    // cudaDeviceSynchronize();
+    // find_canceled_2saddles<<<gridSize_2saddle, blockSize>>>(input_data_host);
+    // cudaDeviceSynchronize();
+    
     // compute_Max_for_Saddle<<<gridSize_2saddle, blockSize>>>();
     // compute_Min_for_Saddle<<<gridSize_1saddle, blockSize>>>();
     
@@ -4657,6 +5381,7 @@ int main(int argc, char** argv){
     cudaMemcpyToSymbol(dec_nMin, &initialValue, sizeof(int));
     // ExtractCP<<<gridSize, blockSize>>>(1);
     // cudaDeviceSynchronize();
+    std::cout<<"vertex classification: "<<elapsedTime/1000<<std::endl;
 
     // sortCP(dec_minimum_host, dec_maximum_host, dec_saddles1_host, dec_saddles2_host, 
     //         dec_saddlerank_host, dec_saddle1rank_host,
@@ -4665,10 +5390,10 @@ int main(int argc, char** argv){
 
     // ComputeTempArray<<<gridSize_max, blockSize>>>(1);
     // ComputeTempArray<<<gridSize_min, blockSize>>>(0);
-    init_max_saddle<<<gridSize_max, blockSize>>>();
-    cudaDeviceSynchronize();
-    init_min_saddle<<<gridSize_min, blockSize>>>();
-    cudaDeviceSynchronize();
+    // init_max_saddle<<<gridSize_max, blockSize>>>();
+    // cudaDeviceSynchronize();
+    // init_min_saddle<<<gridSize_min, blockSize>>>();
+    // cudaDeviceSynchronize();
     findAscPaths<<<gridSize_2saddle, blockSize>>>();
     cudaDeviceSynchronize();
     findDescPaths<<<gridSize_1saddle, blockSize>>>();
@@ -4691,7 +5416,8 @@ int main(int argc, char** argv){
     cudaMemcpyFromSymbol(&host_number_of_false_cases, num_false_cases, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&host_number_of_false_cases1, num_false_cases1, sizeof(int), 0, cudaMemcpyDeviceToHost);
 
-    int host_wrong_max_counter, host_wrong_max_counter_2;
+    host_wrong_max_counter = 0;
+    host_wrong_max_counter_2 = 0;
 
     std::cout<<host_number_of_false_cases<<std::endl;
     
@@ -4709,7 +5435,7 @@ int main(int argc, char** argv){
         
         s_loops_join(gridSize, blockSize, gridSize_1saddle);
         
-        int host_wrong_min_counter = 0;
+        host_wrong_min_counter = 0;
         cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
         if(host_wrong_min_counter == 0){
             saddle_loops_join(gridSize_min, gridSize, blockSize);
@@ -4718,7 +5444,7 @@ int main(int argc, char** argv){
     }
 
 
-    int host_wrong_min_counter = 0, host_wrong_min_counter_2 = 0, host_wrong_saddle_counter = 0, host_wrong_saddle_counter_join = 0;
+    
     cudaMemcpyFromSymbol(&host_number_of_false_cases, num_false_cases, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&host_number_of_false_cases1, num_false_cases1, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&host_count_f_max, count_f_max, sizeof(int), 0, cudaMemcpyDeviceToHost);
@@ -4732,6 +5458,7 @@ int main(int argc, char** argv){
     cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
     // return 0;
     std::vector<std::vector<float>> time_counter;
+    // while(false){
     while(host_number_of_false_cases > 0 || host_number_of_false_cases1 > 0|| host_count_f_max > 0 || host_count_f_min > 0 || host_count_f_saddle > 0 
             || host_wrong_max_counter > 0 || host_wrong_max_counter_2 > 0 || host_wrong_saddle_counter > 0
             || host_wrong_min_counter > 0 || host_wrong_min_counter_2 > 0 || host_wrong_saddle_counter_join > 0){
@@ -4863,7 +5590,7 @@ int main(int argc, char** argv){
             cudaEventElapsedTime(&elapsedTime, start, stop);
             s_loops_sub+=elapsedTime/1000;
 
-            int host_wrong_min_counter = 0;
+            host_wrong_min_counter = 0;
             cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaDeviceSynchronize();
             if(host_wrong_min_counter == 0){
@@ -4978,6 +5705,7 @@ int main(int argc, char** argv){
         }
         
         if(host_number_of_false_cases1 == 0 && preserve_join_tree){
+
             cudaEventRecord(start, 0);
             s_loops_join(gridSize, blockSize, gridSize_1saddle);
             cudaDeviceSynchronize();
@@ -4985,18 +5713,20 @@ int main(int argc, char** argv){
             cudaEventSynchronize(stop);
             cudaEventElapsedTime(&elapsedTime, start, stop);
             s_loops_sub+=elapsedTime/1000;
-            int host_wrong_min_counter = 0;
+            
+            host_wrong_min_counter = 0;
             cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
+
             if(host_wrong_min_counter == 0){
                 cudaEventRecord(start, 0);
                 saddle_loops_join(gridSize_min, gridSize, blockSize);
                 cudaDeviceSynchronize();
+
                 cudaEventRecord(stop, 0);
                 cudaEventSynchronize(stop);
                 cudaEventElapsedTime(&elapsedTime, start, stop);
                 saddle_loops_sub+=elapsedTime/1000;
             }
-            
         }
 
         cudaEventRecord(start, 0);
@@ -5066,13 +5796,17 @@ int main(int argc, char** argv){
             init_buffer<<<gridSize, blockSize>>>();
             get_wrong_index_max<<<gridSize_2saddle, blockSize>>>();
             cudaDeviceSynchronize();
+            host_wrong_saddle_counter = 0;
             cudaMemcpyToSymbol(wrong_saddle_counter, &initialValue, sizeof(int));
+            cudaDeviceSynchronize();
             init_saddle_rank_buffer<<<gridSize, blockSize>>>();
-            // get_wrong_index_saddles<<<gridSize_max, blockSize>>>();
+            
+            get_wrong_index_saddles<<<gridSize_max, blockSize>>>(d_max_offsets, d_flattened_max2saddles);
             cudaDeviceSynchronize();
             cudaMemcpyFromSymbol(&host_wrong_saddle_counter, wrong_saddle_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_max_counter, wrong_max_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_max_counter_2, wrong_max_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
+            cudaDeviceSynchronize();
             
         }
 
@@ -5085,8 +5819,9 @@ int main(int argc, char** argv){
             cudaDeviceSynchronize();
             init_saddle_rank_buffer<<<gridSize, blockSize>>>(1);
             cudaMemcpyToSymbol(wrong_saddle_counter_join, &initialValue, sizeof(int));
-            // get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>();
+            get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>(d_min_offsets, d_flattened_min1saddles);
             cudaDeviceSynchronize();
+
             cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_min_counter_2, wrong_min_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
@@ -5109,7 +5844,7 @@ int main(int argc, char** argv){
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsedTime, startt, stop);
     std::cout<<"whole time:" <<elapsedTime/1000<<std::endl;
-
+    additional_time = elapsedTime/1000;
     std::ofstream outFilep("../stat_result/performance1_cuda_"+std::to_string(er)+"_"+compressor_id+".txt", std::ios::app);
         // 检查文件是否成功打开
         if (!outFilep) {
