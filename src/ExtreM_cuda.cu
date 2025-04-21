@@ -10,6 +10,7 @@
 #include <bitset>
 #include <filesystem>
 #include <map>
+#include <mpi.h>
 // #include <thrust/device_vector.h>
 // #include <thrust/sequence.h>
 // #include <thrust/find.h>
@@ -49,7 +50,7 @@
 #define MAX_NEIGHBORS 14
 #define MAX_V3 6 
 #define NUM_LOOKUP 14 // 14 * 14 种 (v1, v2) 组合
-#define TILE_SIZE 10
+#define TILE_SIZE 8
 #define BLOCK_SIZE (TILE_SIZE + 2)  // 这里为 10
 #define SIZE (NUM_LOOKUP * MAX_V3 * 3 * sizeof(int))  // 计算数组大小
 int width_host, height_host, depth_host;
@@ -112,8 +113,8 @@ const int NUM_KEYS = sizeof(keys) / sizeof(keys[0]);
 const int LUT_SIZE = 6 * (1<<4) + 6 * (1 << 6) + 2* (1 << 7) + 6 * (1<<8) + 6 * (1<<10) + (1 << 14);
 
 __device__ int LUT_cuda[LUT_SIZE];
-int q_host, threshold_host;
-__device__ int q, threshold;
+int q_host, threshold_host, edit_type_host;
+__device__ int q, threshold, edit_type;
 int LUT[6 * (1<<4) + 6 * (1 << 6) + 2* (1 << 7) + 6 * (1<<8) + 6 * (1<<10) + (1 << 14)];
 // nvcc ExtreM_cuda.cu -o ExtreM_cuda -lzstd
 struct OffsetComparator {
@@ -1536,23 +1537,13 @@ __global__ void ComputeDescendingManifold(int type = 0){
         int r = newX + newY * width + newZ* (height * width); // Calculate the index of the adjacent vertex
         
         if (newX >= 0 && newX < width && newY >= 0 && newY < height && r >= 0 && r < width*height*depth && newZ<depth && newZ>=0) {
-            // int neighbor_id = adjacency[maxNeighbors * i + j];
-            // if(neighbor_id == -1) continue;
             if(vertex_type[r] == 2 || vertex_type[r] == 3){
                 is_saddle_neighbor = true;
                 break;
             }
         }
     }
-    // for(int j = 0; j<maxNeighbors; j++){
-        
-    //     int neighborId = adjacency[i*maxNeighbors+j];
-    //     if(neighborId == -1) continue;
-    //     if(vertex_type[neighborId] == 2 || vertex_type[neighborId] == 3){
-    //         is_saddle_neighbor = true;
-    //         break;
-    //     }
-    // }
+
 
     if(!is_saddle_neighbor) return;
     
@@ -1794,7 +1785,7 @@ __device__ bool islarger_shared(const int v, const int u, double value_v1, doubl
 }
 
 __device__ bool isless(const int v, const int u, const double* offset){
-    return offset[v] < offset[u] || (fabs(offset[v] - offset[u]) == 0 && v < u);
+    return offset[v] < offset[u] || (offset[v] == offset[u] && v < u);
 }
 
 __device__ bool isless_shared(const int v, const int u, double value_v1, double value_v2){
@@ -2094,16 +2085,19 @@ __global__ void computelargestSaddlesForMax(int type = 0){
                 largestSaddlesForMax_t[index] = saddle;
                 continue;
             }
-            if(max != globalMax) {
+            if(index != globalMax) {
                 temp = largestSaddlesForMax_t[index];
-                if(isless(temp, saddle,  offset)) {
+                if(islarger(temp, saddle,  offset)) {
                     largestSaddlesForMax_t[index]
                         = saddle;
                 }
             }
         }
     }
-
+    if(type==1){
+        if(largestSaddlesForMax[index] != largestSaddlesForMax_t[index]) printf("wrong here\n");
+        // else printf("%d %d\n", largestSaddlesForMax[index], largestSaddlesForMax_t[index]);
+    }
     // int largest = -1;
     // int max_index_t = max_index[maxId];
     // int number_of_saddle = reachable_saddle_for_Max_t[max_index_t * 45 + 44] ;
@@ -2495,7 +2489,7 @@ __global__ void get_wrong_join_neighbors(){
                 }
                 label_count++;
         }
-    }
+        }
     }
     // for(int j = 0; j< maxNeighbors; j++){
     //     int neighborId = adjacency[ maxNeighbors * saddle + j];
@@ -2768,7 +2762,7 @@ __device__ void fix_saddle(int i){
             const int id = diff[index];
             int c = delta_counter[id] + 1;
             delta = -bound / (q);
-            // delta = (input_data[id]-bound) - decp_data[id];
+            if(edit_type==1) delta = (input_data[id]-bound) - decp_data[id];
             double oldValue = d_deltaBuffer[id];
             
             if (delta > oldValue) {
@@ -2784,6 +2778,7 @@ __device__ void fix_saddle(int i){
             // delta = (input_data[i]-bound) - decp_data[i];
             int c = delta_counter[i] + 1;
             delta = -bound / (q);
+            if(edit_type==1) delta = (input_data[i]-bound) - decp_data[i];
             double oldValue = d_deltaBuffer[i];
             if (delta > oldValue) {
                 swap(i, delta);
@@ -2856,7 +2851,7 @@ __device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
         delta = -bound / (q);
         // double d = ((decp_data_copy_d[index] - 2 * bound) + decp_value) / 2.0 - decp_value;
         // double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
-        // delta = ((input_data[id] - bound) + decp_data[id]) / 2.0 - decp_data[id];
+        if(edit_type==1) delta = ((input_data[id] - bound) + decp_data[id]) / 2.0 - decp_data[id];
         // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[id] - bound) - decp_data_copy_d[id]) / bound));
         // double Lower_bin1 = get_bin(abs((input_data[id] - bound) - decp_data_copy_d[id]) / bound);
         // delta = ((decp_data_copy_d[id] - Lower_bin1 * bound) + decp_data[id]) / 2.0 - decp_data[id];
@@ -2874,7 +2869,7 @@ __device__ void fix_saddle_local(int i, int *o_lowerStar_start, int o_size1){
     if(count > 0){
         int c = delta_counter[i] + 1;
         delta = -bound / (q);
-        // delta = ((input_data[i] - bound) + decp_data[i]) / 2.0 - decp_data[i];
+        if(edit_type==1) delta = ((input_data[i] - bound) + decp_data[i]) / 2.0 - decp_data[i];
         // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[i] - bound) - decp_data_copy_d[i]) / bound));
         // double Lower_bin1 = get_bin(abs((input_data[i] - bound) - decp_data_copy_d[i]) / bound);
         // delta = ((decp_data_copy_d[i] - Lower_bin1 * bound) + decp_data[i]) / 2.0 - decp_data[i];
@@ -2908,7 +2903,7 @@ __global__ void c_loop(int direction = 0){
         if (vertex_type[index]!=4){
             int c = delta_counter[index] + 1;
             double d = -bound / (q);
-            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            if(edit_type==1) d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             // int Lower_bin = static_cast<int>(std::ceil(abs((input_value - bound) - decp_data_copy_d[index]) / bound));
             // double Lower_bin1 = get_bin(abs((input_value - bound) - decp_data_copy_d[index]) / bound);
             // d = ((decp_data_copy_d[index] - Lower_bin1 * bound) + decp_value) / 2.0 - decp_value;
@@ -2953,7 +2948,7 @@ __global__ void c_loop(int direction = 0){
             int c = delta_counter[largest_index] + 1;
             double d = -bound / (q);
             // double d = ((decp_data_copy_d[largest_index] - 2 * bound) + largest_value) / 2.0 - largest_value;
-            // double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
+            if(edit_type==1) d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
             // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[largest_index] - bound) - decp_data_copy_d[largest_index]) / bound));
             // double Lower_bin1 = get_bin(abs((input_data[largest_index] - bound) - decp_data_copy_d[largest_index]) / bound);
             // d = ((decp_data_copy_d[largest_index] - Lower_bin1 * bound) + decp_data[largest_index]) / 2.0 - decp_data[largest_index];
@@ -3012,7 +3007,7 @@ __global__ void c_loop(int direction = 0){
             int c = delta_counter[smallest_index] + 1;
             double d = -bound / (q);
             // double d = ((decp_data_copy_d[smallest_index] - 2 * bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
-            // double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            if(edit_type==1) d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
             // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[smallest_index] - bound) - decp_data_copy_d[smallest_index]) / bound));
             // double Lower_bin1 = get_bin(abs((input_data[smallest_index] - bound) - decp_data_copy_d[smallest_index]) / bound);
             // d = ((decp_data_copy_d[smallest_index] - Lower_bin1 * bound) + decp_data[smallest_index]) / 2.0 - decp_data[smallest_index];
@@ -3031,7 +3026,7 @@ __global__ void c_loop(int direction = 0){
             int c = delta_counter[index] + 1;
             double d = -bound / (q);
             // double d = ((decp_data_copy_d[index] - 2 * bound) + decp_value) / 2.0 - decp_value;
-            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            if(edit_type==1) d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             // int Lower_bin = static_cast<int>(std::ceil(abs((input_data[index] - bound) - decp_data_copy_d[index]) / bound));
             // double Lower_bin1 = get_bin(abs((input_data[index] - bound) - decp_data_copy_d[index]) / bound);
             // d = ((decp_data_copy_d[index] - Lower_bin1 * bound) + decp_data[index]) / 2.0 - decp_data[index];
@@ -3067,16 +3062,29 @@ __global__ void applyDeltaBuffer() {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (tid < num_Elements) {
-        
-        if(d_deltaBuffer[tid]!=-4.0 * bound){
-            if(delta_counter[tid] <threshold-1 && fabs(input_data[tid]-(decp_data[tid] - bound / (q))) <= bound){
-                decp_data[tid] -= bound / (q); 
-                delta_counter[tid]+=1;
+        const double delta = d_deltaBuffer[tid];
+        if(delta!=-4.0 * bound){
+            if(edit_type == 0){
+                if(delta_counter[tid] <threshold-1 && fabs(input_data[tid]-(decp_data[tid] + delta)) <= bound){
+                    decp_data[tid] += delta; 
+                    delta_counter[tid]+=1;
+                }
+                else{
+                    delta_counter[tid] = threshold;
+                    decp_data[tid] = input_data[tid] - bound;
+                }
             }
             else{
-                delta_counter[tid] = threshold;
-                decp_data[tid] = input_data[tid] - bound;
+                if(fabs(input_data[tid]-(decp_data[tid] + delta)) <= bound){
+                    decp_data[tid] += delta; 
+
+                }
+                else{
+                   
+                    decp_data[tid] = input_data[tid] - bound;
+                }
             }
+            
             int x = tid % width;
             int y = (tid  / width) % height;
             int z = (tid  / (width * height)) % depth;
@@ -3090,17 +3098,12 @@ __global__ void applyDeltaBuffer() {
                 int nz = z + dz;
                 
                 int neighborId = x + dx + (y + dy + (z + dz) * height) * width;
-                // if(nx < 0 || nx >= width || ny < 0 || ny >= height || nz < 0 || nz >= depth) continue;
+                
                 if(nx < 0 || nx >= width || ny < 0 || ny >= height || nz < 0 || nz >= depth || neighborId < 0 || neighborId >= num_Elements) continue;
-                // neighborId = adjacency[maxNeighbors * tid + i];
-                // if(neighborId == -1) continue;
+                
                 updated_vertex[neighborId] = 0;
             }
-            // for(int i = 0;i<14; i++){
-            //     int neighborId = adjacency[14*tid + i];
-            //     if(neighborId == -1) break;
-            //     updated_vertex[neighborId] = 0;
-            // }
+            
             updated_vertex[tid] = 0;
         }     
     }
@@ -3131,8 +3134,6 @@ __global__ void get_wrong_index_max(){
             wrong_rank_max_index_2[pos * 2] = saddleTriplets[i * 46 + numberOfMax];
             wrong_rank_max_index_2[pos * 2 + 1] = dec_saddleTriplets[i * 46 + numberOfMax];
             wrong_rank_max_2[maxId] = 1;
-            
-            
         }
     }
         
@@ -3154,14 +3155,14 @@ __global__ void get_wrong_index_min(){
         }
     }
     int numberOfmin = saddle1Triplets[i * 46 + 44] - 1;
-    int dec_numberOfmin = dec_saddle1Triplets[i * 46 + 44] - 1;
-    if(saddle1Triplets[i * 46 + numberOfmin] != dec_saddle1Triplets[i * 46 + dec_numberOfmin]){
+    // int dec_numberOfmin = dec_saddle1Triplets[i * 46 + 44] - 1;
+    if(saddle1Triplets[i * 46 + numberOfmin] != dec_saddle1Triplets[i * 46 + numberOfmin]){
         int minId = saddle1Triplets[i * 46 + numberOfmin];
         if(wrong_rank_min_2[minId] == 0){
             
             int pos = atomicAdd(&wrong_min_counter_2, 1);
             wrong_rank_min_index_2[pos * 2] = saddle1Triplets[i * 46 + numberOfmin];
-            wrong_rank_min_index_2[pos * 2 + 1] = dec_saddle1Triplets[i * 46 + dec_numberOfmin];
+            wrong_rank_min_index_2[pos * 2 + 1] = dec_saddle1Triplets[i * 46 + numberOfmin];
             wrong_rank_min_2[minId] = 1;
         }
     }
@@ -3192,8 +3193,6 @@ __global__ void get_wrong_index_saddles(
 
     int start = d_max_offsets[max_id];
     int end = d_max_offsets[max_id + 1];
-
-    
 
     int true_largest = largestSaddlesForMax[max_id];
     double true_largest_value = decp_data[true_largest];
@@ -3247,16 +3246,19 @@ __global__ void get_wrong_index_saddles_join(
     double true_smallest_value = decp_data[true_smallest];
     int minId = minimum[min_id];
     bool isFalse = false;
+    
     for (int i = start; i < end; ++i) {
         int saddle = d_flattened_min1saddles[i];
-        if(isless_shared(decp_data[saddle], true_smallest_value, saddle, true_smallest)){
+        // printf("%d %d %.17f %.17f\n", saddle, true_smallest, decp_data[saddle], true_smallest_value);
+        if(decp_data[saddle]< true_smallest_value || (decp_data[saddle] == true_smallest_value && saddle< true_smallest)){
             isFalse = true;
-            if(wrong_rank_saddle[minId] == 0){
-                int pos = atomicAdd(&wrong_saddle_counter, 1);
+            
+            if(wrong_rank_saddle_join[minId] == 0){
+                // printf("%d %d %.17f %.17f\n", saddle, true_smallest, decp_data[saddle], true_smallest_value);
+                int pos = atomicAdd(&wrong_saddle_counter_join, 1);
                 wrong_rank_saddle_join_index[pos * 2] = true_smallest;
                 wrong_rank_saddle_join_index[pos * 2 + 1] = saddle;
-                
-                wrong_rank_saddle[minId] = 1;
+                wrong_rank_saddle_join[minId] = 1;
                 break;
             }
         }
@@ -3332,7 +3334,7 @@ __global__ void fix_wrong_index_max(int direction = 0){
         tmp_false_value = (input_data[false_index] - bound + decp_data[false_index]) / 2.0;
         int c = delta_counter[false_index] + 1;
         double d = -bound / (q);
-        // double d = tmp_false_value - decp_data[false_index];
+        if(edit_type==1) d = tmp_false_value - decp_data[false_index];
         
         double oldValue = d_deltaBuffer[false_index];
         
@@ -3352,7 +3354,7 @@ __global__ void fix_wrong_index_max(int direction = 0){
         tmp_true_value = (input_data[true_index] - bound + decp_data[true_index]) / 2.0;
         int c = delta_counter[true_index] + 1;
         double d = -bound / (q);
-        // double d = tmp_true_value - decp_data[true_index];
+        if(edit_type==1) d = tmp_true_value - decp_data[true_index];
         
         double oldValue = d_deltaBuffer[true_index];
         
@@ -3382,7 +3384,7 @@ __global__ void fix_wrong_index_min(int direction = 0){
         int c = delta_counter[true_index] + 1;
         double d = -bound / (q);
         double oldValue = d_deltaBuffer[true_index];
-        
+        if(edit_type==1) d = tmp_true_value - decp_data[true_index];
         if (d > oldValue) {
             swap(true_index, d);
         }  
@@ -3398,6 +3400,7 @@ __global__ void fix_wrong_index_min(int direction = 0){
         // double d = tmp_false_value - decp_data[false_index];
         int c = delta_counter[false_index] + 1;
         double d = -bound / (q);
+        if(edit_type==1) d = tmp_false_value - decp_data[false_index];
         // printf("%d %d %.17f\n", false_index, true_index, d);
         double oldValue = d_deltaBuffer[false_index];
         
@@ -3427,7 +3430,7 @@ __global__ void fix_wrong_index_saddle(int direction = 0){
         if(tmp_true_value > tmp_false_value || (tmp_true_value == tmp_false_value && true_index > false_index)) return;
         int c = delta_counter[false_index] + 1;
         double d = -bound / (q);
-        // double d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
+        if(edit_type==1) d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
         double oldValue = d_deltaBuffer[false_index];
         if (d > oldValue) {
             swap(false_index, d);
@@ -3442,13 +3445,17 @@ __global__ void fix_wrong_index_saddle(int direction = 0){
         double tmp_false_value = decp_data[false_index];
         // if(true_index == 5477) printf("%d: %.17f %.17f, %d: %.17f %.17f\n", true_index, decp_data[true_index], input_data[true_index], false_index, decp_data[false_index], input_data[false_index]);
         if(tmp_true_value < tmp_false_value || (tmp_true_value == tmp_false_value && true_index < false_index)) return;
+        
         int c = delta_counter[true_index] + 1;
         double d = -bound / (q);
-        // double d = (input_data[true_index] - bound + decp_data[true_index])/2.0 - decp_data[true_index];
-        double oldValue = d_deltaBuffer[true_index];
-        if (d > oldValue) {
-            swap(true_index, d);
-        }  
+        d_deltaBuffer[true_index] = d;
+        if(edit_type==1) {
+            d = (input_data[true_index] - bound + decp_data[true_index])/2.0 - decp_data[true_index];
+            double oldValue = d_deltaBuffer[true_index];
+            if (d > oldValue) {
+                swap(true_index, d);
+            }  
+        }
     }
     
 
@@ -3500,7 +3507,6 @@ void s_loops_join(dim3 gridSize, dim3 blockSize, dim3 gridSize_1saddle){
 
     if(host_wrong_min_counter_2>0) fix_wrong_index_min<<<gridSize_wrong_min_2, blockSize>>>(1);
 
-    
     applyDeltaBuffer<<<gridSize, blockSize>>>();
 
 }
@@ -3587,7 +3593,7 @@ __device__ void c_loop_local(int index, int direction = 0){
         if (vertex_type[index]!=4){
             int c = delta_counter[index] + 1;
             double d = -bound / (q);
-            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            if(edit_type==1) d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             
             if (d > oldValue) {
@@ -3628,7 +3634,7 @@ __device__ void c_loop_local(int index, int direction = 0){
             }
             int c = delta_counter[largest_index] + 1;
             double d = -bound / (q);
-            // double d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
+            if(edit_type==1) d = ((input_data[largest_index] - bound) + largest_value) / 2.0 - largest_value;
             
             double oldValue = d_deltaBuffer[largest_index];
             if (d > oldValue) {
@@ -3679,7 +3685,7 @@ __device__ void c_loop_local(int index, int direction = 0){
             double decp_smallest_value = decp_data[smallest_index];
             int c = delta_counter[smallest_index] + 1;
             double d = -bound / (q);
-            // double d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
+            if(edit_type==1) d = ((smallest_value - bound) + decp_smallest_value) / 2.0 - decp_smallest_value;
             if(decp_value>decp_smallest_value or (decp_value==decp_smallest_value and index>smallest_index)){
                 return;
             }
@@ -3694,7 +3700,7 @@ __device__ void c_loop_local(int index, int direction = 0){
         else{
             int c = delta_counter[index] + 1;
             double d = -bound / (q);
-            // double d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
+            if(edit_type==1) d = ((input_value - bound) + decp_value) / 2.0 - decp_value;
             double oldValue = d_deltaBuffer[index];
             if (d > oldValue) {
                 swap(index, d);
@@ -3773,7 +3779,7 @@ __global__ void classifyVertex_CUDA(int type = 0, int local = 1) {
     int g_idx = gz * width * height + gy * width + gx;
     if(g_idx >= num_Elements) return;
     if (!(gx < width && gy < height && gz < depth))  return;
-    if(updated_vertex[g_idx] != 0 && local == 1) return;
+    // if(updated_vertex[g_idx] != 0 && local == 1) return;
 
     double currentHeight = smem[tx][ty][tz];
     // double currentHeight = heightMap[g_idx];
@@ -3804,7 +3810,7 @@ __global__ void classifyVertex_CUDA(int type = 0, int local = 1) {
             int smem_z = tz + (newZ - gz);
             
             double neighbor_value = smem[smem_x][smem_y][smem_z];
-
+            
             if (neighbor_value < currentHeight || (neighbor_value == currentHeight && r < g_idx)) {
                 if(type==0) lowerStars_t[vertexId*(maxNeighbors+1) + lowerCount] = r;
                 binary[maxNeighbors - 1 - neighbor_size] = 0;
@@ -3917,13 +3923,14 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
                  (height_host + TILE_SIZE - 1) / TILE_SIZE,
                  (depth_host + TILE_SIZE - 1) / TILE_SIZE);
 
-    cudaMemcpyToSymbol(count_f_max, &initialValue, sizeof(int));
-    cudaMemcpyToSymbol(count_f_min, &initialValue, sizeof(int));
-    cudaMemcpyToSymbol(count_f_saddle, &initialValue, sizeof(int));
+    
     auto start = std::chrono::high_resolution_clock::now();
 
     init_delta<<<gridSize, blockSize>>>();
     cudaDeviceSynchronize();
+    cudaMemcpyToSymbol(count_f_max, &initialValue, sizeof(int));
+    cudaMemcpyToSymbol(count_f_min, &initialValue, sizeof(int));
+    cudaMemcpyToSymbol(count_f_saddle, &initialValue, sizeof(int));
     classifyVertex_CUDA<<<gridDim1, blockDim1>>>(1, 0);
     cudaDeviceSynchronize();
     
@@ -3950,8 +3957,9 @@ void c_loops(dim3 gridSize, dim3 blockSize, int host_count_f_max, int host_count
     cudaMemcpyFromSymbol(&host_count_f_max, count_f_max, sizeof(int), 0, cudaMemcpyDeviceToHost);
     cudaMemcpyFromSymbol(&host_count_f_saddle, count_f_saddle, sizeof(int), 0, cudaMemcpyDeviceToHost);
     int cnt = 0;
+    // std::cout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
     while(host_count_f_max>0 or host_count_f_min>0 or host_count_f_saddle>0){
-        std::cout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
+        // std::xcout<<"c_loops: "<<host_count_f_max<<", "<<host_count_f_min<<", "<<host_count_f_saddle<<std::endl;
         cnt++;
         start = std::chrono::high_resolution_clock::now();
 
@@ -4108,7 +4116,7 @@ __global__ void fixpath(int direction = 0){
             
             int c = delta_counter[false_index] + 1;
             double d = -bound / (q);
-            // double d = ((input_data[false_index] - bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
+            if(edit_type==1) d = ((input_data[false_index] - bound) + decp_data[false_index]) / 2.0 - decp_data[false_index];
         
             double oldValue = d_deltaBuffer[false_index];
             if (d > oldValue) {
@@ -4185,7 +4193,7 @@ __global__ void fixpath(int direction = 0){
 
             int c = delta_counter[true_index] + 1;
             double d = -bound / (q);
-            // double d = ((input_data[true_index] - bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
+            if(edit_type==1) d = ((input_data[true_index] - bound) + decp_data[true_index]) / 2.0 - decp_data[true_index];
             double oldValue = d_deltaBuffer[true_index];
             if (d > oldValue) {
                 swap(true_index, d);
@@ -4224,7 +4232,7 @@ void saddle_loops(dim3 gridSize_max, dim3 gridSize, dim3 blockSize){
     get_wrong_index_saddles<<<gridSize_max, blockSize>>>(d_max_offsets, d_flattened_max2saddles);
     init_delta<<<gridSize, blockSize>>>();
     // std::cout<<wrong_saddle_counter<<std::endl;
-    host_wrong_saddle_counter = 0;
+    // host_wrong_saddle_counter = 0;
     cudaMemcpyFromSymbol(&host_wrong_saddle_counter, wrong_saddle_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
     
     dim3 gridSize_wrong_saddle((host_wrong_saddle_counter + blockSize.x - 1) / blockSize.x);
@@ -4239,10 +4247,12 @@ void saddle_loops_join(dim3 gridSize_min, dim3 gridSize, dim3 blockSize){
     init_saddle_rank_buffer<<<gridSize, blockSize>>>(1);
     get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>(d_min_offsets, d_flattened_min1saddles);
     init_delta<<<gridSize, blockSize>>>();
-    host_wrong_saddle_counter_join = 0;
-    cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
-    dim3 gridSize_wrong_saddle_join((host_wrong_saddle_counter_join + blockSize.x - 1) / blockSize.x);
 
+    // host_wrong_saddle_counter_join = 0;
+    cudaMemcpyFromSymbol(&host_wrong_saddle_counter_join, wrong_saddle_counter_join, sizeof(int), 0, cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+    dim3 gridSize_wrong_saddle_join((host_wrong_saddle_counter_join + blockSize.x - 1) / blockSize.x);
+    std::cout<<"wrong join saddels:"<<host_wrong_saddle_counter_join<<std::endl;
     if(host_wrong_saddle_counter_join >0){
         dim3 gridSize_wrong_saddle_join((host_wrong_saddle_counter_join + blockSize.x - 1) / blockSize.x);
         fix_wrong_index_saddle<<<gridSize_wrong_saddle_join, blockSize>>>(1);
@@ -4664,6 +4674,128 @@ void cost(std::string filename, double* decp_data, double* decp_data_copy, doubl
     return;
 }
 
+void floating_point_cost(std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter){
+    std::vector<int> indexs;
+    std::vector<double> edits;
+    std::vector<unsigned long long> exponents;
+    std::vector<unsigned long long> mantissas;
+
+    int cnt = 0;
+    for (int i=0;i<num_Elements_host;i++){
+        if (decp_data_copy[i]!=decp_data[i]){
+            indexs.push_back(i);
+            edits.push_back(-(decp_data_copy[i] - (input_data[i] - host_bound)));
+            cnt++;
+        }
+    }
+    
+    std::vector<int> diffs;  
+    if (!indexs.empty()) {
+        diffs.push_back(indexs[0]);
+    }
+    for (size_t i = 1; i < indexs.size(); ++i) {
+        diffs.push_back(indexs[i] - indexs[i - 1]);
+    }
+    
+    std::string indexfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+".bin";
+    std::string editsfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+".bin";
+    std::string compressedindex = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+".bin.zst";
+    std::string compressededits = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+".bin.zst";
+    
+    // Shockwave, 64, 64, 512
+
+    double ratio = double(cnt)/(num_Elements_host);
+    std::cout<<cnt<<","<<ratio<<std::endl;
+
+    std::ofstream file(indexfilename, std::ios::binary | std::ios::out);
+    if (file.is_open()) {
+        file.write(reinterpret_cast<const char*>(diffs.data()), diffs.size());
+        file.close();
+    } else {
+        std::cerr << "cannot open file: " << filename << " ." << std::endl;
+    }
+    
+    std::string command;
+    command = "zstd -f " + indexfilename;
+    std::cout << "Executing command: " << command << std::endl;
+    int result = std::system(command.c_str());
+    if (result == 0) {
+        
+        std::cout << "Compression successful." << std::endl;
+    } else {
+        std::cout << "Compression failed." << std::endl;
+    }
+
+    std::ofstream file1(editsfilename, std::ios::binary | std::ios::out);
+    if (file1.is_open()) {
+        file1.write(reinterpret_cast<const char*>(edits.data()), edits.size()*sizeof(double));
+        file1.close();
+    } else {
+        std::cerr << "cannot open file: " << filename << " ." << std::endl;
+    }
+    
+    
+    command = "zstd -f " + editsfilename;
+    std::cout << "Executing command: " << command << std::endl;
+    result = std::system(command.c_str());
+    if (result == 0) {
+        
+        std::cout << "Compression successful." << std::endl;
+    } else {
+        std::cout << "Compression failed." << std::endl;
+    }
+
+    std::uintmax_t compressed_editSize = std::filesystem::file_size(compressededits);
+    std::uintmax_t compressed_indexSize = std::filesystem::file_size(compressedindex);
+    std::uintmax_t original_editSize = std::filesystem::file_size(editsfilename);
+    std::uintmax_t original_dataSize = std::filesystem::file_size(file_path);
+    std::uintmax_t compressed_dataSize = cmpSize;
+    std::uintmax_t original_indexSize = std::filesystem::file_size(indexfilename);
+    
+    
+    
+   
+    
+    double overall_ratio = double(original_dataSize)/(compressed_dataSize+compressed_editSize+compressed_indexSize);
+   
+    double bitRate = 64/overall_ratio; 
+
+    double psnr = calculatePSNR(input_data, decp_data_copy, maxValue-minValue);
+    double fixed_psnr = calculatePSNR(input_data, decp_data, maxValue-minValue);
+
+    // std::ofstream outFile3("./stat_result/result_"+filename+"_"+compressor_id+"_detailed_additional_time.txt", std::ios::app);
+    std::ofstream outFile3("../stat_result/floating_result_"+filename+"_"+compressor_id+"_q.txt", std::ios::app);
+    
+    if (!outFile3) {
+        std::cerr << "Unable to open file for writing." << std::endl;
+        return; // 返回错误码
+    }
+
+    outFile3 << std::to_string(host_bound)<<":" << std::endl;
+    outFile3 << std::setprecision(17)<< "related_error: "<<er << std::endl;
+    outFile3 << std::setprecision(17)<< "absolute_error: "<<host_bound << std::endl;
+    outFile3 << std::setprecision(17)<< "OCR: "<<overall_ratio << std::endl;
+    outFile3 << "threshold: "<< threshold_host << std::endl;
+    outFile3 <<std::setprecision(17)<< "CR: "<<double(original_dataSize)/compressed_dataSize << std::endl;
+    outFile3 << std::setprecision(17)<<"OBR: "<<bitRate << std::endl;
+    outFile3 << std::setprecision(17)<<"BR: "<< 64/(double(original_indexSize)/compressed_dataSize) << std::endl;
+    outFile3 << std::setprecision(17)<<"psnr: "<<psnr << std::endl;
+    outFile3 << std::setprecision(17)<<"fixed_psnr: "<<fixed_psnr << std::endl;
+    
+
+    
+    outFile3 << std::setprecision(17)<<"edit_ratio: "<<ratio << std::endl;
+    outFile3 << std::setprecision(17)<<"compression_time: "<<compression_time<< std::endl;
+    outFile3 << std::setprecision(17)<<"additional_time: "<<additional_time<< std::endl;
+    outFile3 << "\n" << std::endl;
+
+    
+    outFile3.close();
+
+    std::cout << "Variables have been appended to output.txt" << std::endl;
+    return;
+}
+
 void checkCudaError(cudaError_t err, const char* msg) {
     if (err != cudaSuccess) {
         std::cerr << msg << ": " << cudaGetErrorString(err) << std::endl;
@@ -4807,6 +4939,16 @@ __global__ void findSmallestSaddlePerMin(
     smallestSaddlesForMin[min_id] = best_saddle;
 }
 
+std::string extractFilename(const std::string& path) {
+    
+    size_t lastSlash = path.find_last_of("/\\");
+    std::string filename = (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
+
+    size_t dotPos = filename.find_last_of('.');
+    std::string name = (dotPos == std::string::npos) ? filename : filename.substr(0, dotPos);
+
+    return name;
+}
 
 
 int main(int argc, char** argv){
@@ -4818,12 +4960,13 @@ int main(int argc, char** argv){
     std::string compressor_id = argv[3];
     host_sim = std::stod(argv[4]);
     q_host = std::stoi(argv[5]);
+    edit_type_host = std::stoi(argv[6]);
     
     std::istringstream iss(dimension);
     char delimiter;
     
 
-    bool preserve_join_tree = true;
+    bool preserve_join_tree = false;
     
 
     if (std::getline(iss, file_path, ',')) {
@@ -4872,7 +5015,7 @@ int main(int argc, char** argv){
     threshold_host = q_host;
     checkCudaError(cudaMemcpyToSymbol(q, &q_host, sizeof(int), 0, cudaMemcpyHostToDevice), "persistence1");
     checkCudaError(cudaMemcpyToSymbol(threshold, &threshold_host, sizeof(int), 0, cudaMemcpyHostToDevice), "persistence1");
-    
+    checkCudaError(cudaMemcpyToSymbol(edit_type, &edit_type_host, sizeof(int), 0, cudaMemcpyHostToDevice), "persistence1");
     
     cudaEventRecord(startt, 0);
     int *dec_vertex_type_host, *vertex_type_host, *vertex_cells_host, *delta_counter_host,
@@ -5225,7 +5368,7 @@ int main(int argc, char** argv){
     // cudaMemset(dec_saddle1rank_host, -1, nSaddle1_host * sizeof(int));
     // cudaMemset(saddle1rank_host, -1, nSaddle1_host *  sizeof(int));
 
-    cudaMemset(saddle1Triplets_host, -1, nSaddle1_host * 46 * sizeof(int));
+    // cudaMemset(saddle1Triplets_host, -1, nSaddle1_host * 46 * sizeof(int));
     
     // cudaMemset(tempArray_host, -1, num_Elements_host * sizeof(int));
     // cudaMemset(dec_tempArray_host, -1, num_Elements_host * sizeof(int));
@@ -5434,8 +5577,6 @@ int main(int argc, char** argv){
     if(host_number_of_false_cases1 == 0 && preserve_join_tree){
         
         s_loops_join(gridSize, blockSize, gridSize_1saddle);
-        
-        host_wrong_min_counter = 0;
         cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
         if(host_wrong_min_counter == 0){
             saddle_loops_join(gridSize_min, gridSize, blockSize);
@@ -5463,11 +5604,10 @@ int main(int argc, char** argv){
             || host_wrong_max_counter > 0 || host_wrong_max_counter_2 > 0 || host_wrong_saddle_counter > 0
             || host_wrong_min_counter > 0 || host_wrong_min_counter_2 > 0 || host_wrong_saddle_counter_join > 0){
         std::vector<float> temp_time;
-        std::cout<<
-        "whole loops:"<<host_number_of_false_cases<<", "<<host_number_of_false_cases1<<", "<<
+        std::cout<<"whole loops:"<<host_number_of_false_cases<<", "<<host_number_of_false_cases1<<", "<<
         host_count_f_max <<", "<< host_count_f_min << ", "<< host_count_f_saddle<<", "
-        <<host_wrong_max_counter<<", "<<host_wrong_max_counter_2<<", "<<host_wrong_saddle_counter
-        <<", "<<host_wrong_min_counter<<", "<<host_wrong_min_counter_2<<", "<<host_wrong_saddle_counter_join<<std::endl;
+        <<host_wrong_max_counter<<", "<<host_wrong_max_counter_2
+        <<", "<<host_wrong_min_counter<<", "<<host_wrong_min_counter_2<<", "<<host_wrong_saddle_counter<<", "<<host_wrong_saddle_counter_join<<std::endl;
         
         float cloops_sub = 0.0;
         float rloops_sub = 0.0;
@@ -5796,7 +5936,7 @@ int main(int argc, char** argv){
             init_buffer<<<gridSize, blockSize>>>();
             get_wrong_index_max<<<gridSize_2saddle, blockSize>>>();
             cudaDeviceSynchronize();
-            host_wrong_saddle_counter = 0;
+            // host_wrong_saddle_counter = 0;
             cudaMemcpyToSymbol(wrong_saddle_counter, &initialValue, sizeof(int));
             cudaDeviceSynchronize();
             init_saddle_rank_buffer<<<gridSize, blockSize>>>();
@@ -5807,6 +5947,7 @@ int main(int argc, char** argv){
             cudaMemcpyFromSymbol(&host_wrong_max_counter, wrong_max_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_max_counter_2, wrong_max_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaDeviceSynchronize();
+            std::cout<<"final1 :" << host_wrong_saddle_counter<<std::endl;
             
         }
 
@@ -5817,6 +5958,7 @@ int main(int argc, char** argv){
             init_buffer<<<gridSize, blockSize>>>(1);
             get_wrong_index_min<<<gridSize_1saddle, blockSize>>>();
             cudaDeviceSynchronize();
+
             init_saddle_rank_buffer<<<gridSize, blockSize>>>(1);
             cudaMemcpyToSymbol(wrong_saddle_counter_join, &initialValue, sizeof(int));
             get_wrong_index_saddles_join<<<gridSize_min, blockSize>>>(d_min_offsets, d_flattened_min1saddles);
@@ -5826,6 +5968,15 @@ int main(int argc, char** argv){
             cudaMemcpyFromSymbol(&host_wrong_min_counter_2, wrong_min_counter_2, sizeof(int), 0, cudaMemcpyDeviceToHost);
             cudaMemcpyFromSymbol(&host_wrong_min_counter, wrong_min_counter, sizeof(int), 0, cudaMemcpyDeviceToHost);
         }
+        
+        cudaMemcpyToSymbol(count_f_max, &initialValue, sizeof(int));
+        cudaMemcpyToSymbol(count_f_min, &initialValue, sizeof(int));
+        cudaMemcpyToSymbol(count_f_saddle, &initialValue, sizeof(int));
+        classifyVertex_CUDA<<<gridDim1, blockDim1>>>(1, 0);
+        cudaDeviceSynchronize();
+        cudaMemcpyFromSymbol(&host_count_f_min, count_f_min, sizeof(int), 0, cudaMemcpyDeviceToHost);
+        cudaMemcpyFromSymbol(&host_count_f_max, count_f_max, sizeof(int), 0, cudaMemcpyDeviceToHost);
+        cudaMemcpyFromSymbol(&host_count_f_saddle, count_f_saddle, sizeof(int), 0, cudaMemcpyDeviceToHost);
 
         temp_time.push_back(cloops_sub);
         temp_time.push_back(rloops_sub);
@@ -5842,6 +5993,9 @@ int main(int argc, char** argv){
     cudaDeviceSynchronize();
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
+    std::cout<<"finally:"<<std::endl;
+    saddle_loops_join(gridSize_min, gridSize, blockSize);
+    // c_loops(gridSize, blockSize, host_count_f_max, host_count_f_min, host_count_f_saddle);
     cudaEventElapsedTime(&elapsedTime, startt, stop);
     std::cout<<"whole time:" <<elapsedTime/1000<<std::endl;
     additional_time = elapsedTime/1000;
@@ -5905,14 +6059,21 @@ int main(int argc, char** argv){
     cudaMemcpy(decp_data_copy_d.data(), decp_data_copy, num_Elements_host * sizeof(double), cudaMemcpyDeviceToHost);
     cudaDeviceSynchronize();
 
-    cost("QMC", decp_d.data(), decp_data_copy_d.data(), input_data_d.data(),compressor_id,delta_counter_d);
-    
+    std::string name = extractFilename(file_path);
+    if(edit_type_host==0) cost(name, decp_d.data(), decp_data_copy_d.data(), input_data_d.data(),compressor_id,delta_counter_d);
+    else floating_point_cost(name, decp_d.data(), decp_data_copy_d.data(), input_data_d.data(),compressor_id,delta_counter_d);
     // std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter
-    
+
+    computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(0);
+    cudaDeviceSynchronize();
+    computelargestSaddlesForMax<<<gridSize_max, blockSize>>>(1);
+    cudaDeviceSynchronize();
+
     saveArrayToBin(decp_data_copy_d.data(), num_Elements_host, "decp.bin");
     saveArrayToBin(decp_d.data(), num_Elements_host, "fixed.bin");
 
     
+    return 0;
 
 
 }

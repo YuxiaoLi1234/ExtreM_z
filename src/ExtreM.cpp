@@ -8,34 +8,32 @@
 #include <omp.h>
 #include <set>
 #include <cfloat>
-
+#include <filesystem>
+#include <bitset>
 
 
 extern "C" {
-    int directions[78] = {
-        1, 0, 0, 
-        -1, 0, 0,   
-        0, 1, 0, 
-        0, -1, 0,
-        -1, 1, 0,
-        1, -1, 0, 
-        0, 0, -1, 0, -1, 1,
-        0, 0, 1, 0, 1, -1,
-        -1, 0, 1, 1, 0, -1,
-        1, 1, 0, -1, -1, 0,
-        1, 0, 1, -1, 0, -1,
-        0, 1, 1, 0, -1, -1,
-        1, 1, 1, 1, 1, -1,  
-        1, -1, 1, 1, -1, -1,
-        -1, 1, 1, -1, 1, -1,
-        -1, -1, 1, -1, -1, -1
+    int directions[42] = {
+       1,0,0, -1,0,0, 0,1,0, 0,-1,0,
+        0,0,1, 0,0,-1, -1,1,0, 1,-1,0,
+        0,1,1, 0,-1,-1, -1,0,1, 1,0,-1,
+        -1,1,1, 1,-1,-1
     };
-
+    int neighborOffsets[14][3] = {
+        {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0},
+        {0,0,1}, {0,0,-1}, {-1,1,0}, {1,-1,0},
+        {0,1,1}, {0,-1,-1}, {-1,0,1}, {1,0,-1},
+        {-1,1,1}, {1,-1,-1}
+    };
+    int LUT[1 << 14];
+    
     double* d_deltaBuffer;
     int width, height, depth, maxNeighbors, num_Elements;
     int* adjacency;
     double *decp_data, *input_data, *decp_data_copy;
-    double bound;
+    double bound, additional_time, compression_time, er, maxValue, minValue;
+    size_t cmpSize = 0;
+    std::string file_path;
     int *dec_vertex_type, *vertex_type;
 
     std::atomic_int count_f_max;
@@ -126,7 +124,7 @@ extern "C" {
         conf.relErrorBound = er; 
 
         
-        size_t cmpSize = 0;
+        
         char *compressedData = SZ_compress(conf, input_data, cmpSize);
 
         SZ_decompress(conf, compressedData, cmpSize, decp_data);
@@ -135,8 +133,8 @@ extern "C" {
         delete[] compressedData;
 
         
-        double minValue = *std::min_element(input_data, input_data + data_size);
-        double maxValue = *std::max_element(input_data, input_data + data_size);
+        minValue = *std::min_element(input_data, input_data + data_size);
+        maxValue = *std::max_element(input_data, input_data + data_size);
         bound = (maxValue - minValue) * er;
         
         std::cout << "Data read, compressed, and decompressed successfully." << std::endl;
@@ -144,8 +142,7 @@ extern "C" {
 
 
     int ComputeDescendingManifold(const double *offset, const int *vertex_type, int *DS_M){
-        // computePathCompressionSingle(DS_M, false, offset);
-        // return 0;
+        
         #pragma omp parallel for
         for (int i = 0; i < num_Elements; i++) {
             int largest_neighbor = i;
@@ -220,6 +217,187 @@ extern "C" {
 
     }
 
+    std::vector<uint8_t> encodeTo3BitBitmap(const std::vector<int>& data) {
+        std::vector<uint8_t> bitmap; // 存储结果的位图
+        uint8_t currentByte = 0; // 当前字节
+        int bitIndex = 0; // 当前位的索引
+
+        for (int value : data) {
+            if (value < 0 || value > 6) {
+                
+                std::cerr << "错误：输入值超出范围 (0-6)。"<<value << std::endl;
+                return {};
+            }
+
+            // 将当前值的3位插入到当前字节
+            currentByte |= (value << (bitIndex)); // 将值左移到正确的位置
+            bitIndex += 3; // 增加3位
+
+            // 检查是否需要写入字节
+            if (bitIndex >= 8) { // 如果当前字节已填满（8位）
+                bitmap.push_back(currentByte); // 将填满的字节加入位图
+                bitIndex -= 8; // 减去已填满的位
+                currentByte = (value >> (3 - bitIndex)); // 如果有剩余的位，存储到下一个字节的起始位置
+            }
+        }
+
+        // 如果最后有未完成的字节，写入它
+        if (bitIndex > 0) {
+            bitmap.push_back(currentByte);
+        }
+
+        return bitmap;
+    }
+
+    double calculateMSE(const double* original, const double* compressed) {
+
+
+        double mse = 0.0;
+        for (size_t i = 0; i < num_Elements; i++) {
+            mse += std::pow(static_cast<double>(original[i]) - compressed[i], 2);
+        }
+        mse /= num_Elements;
+        return mse;
+    }
+
+    double calculatePSNR( double* original, double* compressed, double maxValue) {
+        double mse = calculateMSE(original, compressed);
+        if (mse == 0) {
+            return std::numeric_limits<double>::infinity(); // Perfect match
+        }
+        double psnr = -20.0*log10(sqrt(mse)/maxValue);
+        return psnr;
+    }
+
+    void cost(std::string filename, double* decp_data, double* decp_data_copy, double* input_data, std::string compressor_id, std::vector<int> delta_counter){
+        std::vector<int> indexs(num_Elements, 0);
+        std::vector<double> edits;
+        std::vector<unsigned long long> exponents;
+        std::vector<unsigned long long> mantissas;
+
+        int cnt = 0;
+        for (int i=0;i<num_Elements;i++){
+            if (decp_data_copy[i]!=decp_data[i]){
+                indexs[i] = delta_counter[i];
+                
+                if(indexs[i]==6){
+                    edits.push_back(-(decp_data_copy[i] - (input_data[i] - bound)));
+                }
+                cnt++;
+            }
+        }
+        
+        
+        std::vector<uint8_t> bitmap = encodeTo3BitBitmap(indexs);
+
+        
+        std::string indexfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+std::to_string(bound)+".bin";
+        std::string editsfilename = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+std::to_string(bound)+".bin";
+        std::string compressedindex = "/pscratch/sd/y/yuxiaoli/MSCz/data1"+filename+std::to_string(bound)+".bin.zst";
+        std::string compressededits = "/pscratch/sd/y/yuxiaoli/MSCz/data_edits"+filename+std::to_string(bound)+".bin.zst";
+        
+        // Shockwave, 64, 64, 512
+
+        double ratio = double(cnt)/(num_Elements);
+        std::cout<<cnt<<","<<ratio<<std::endl;
+
+        std::ofstream file(indexfilename, std::ios::binary | std::ios::out);
+        if (file.is_open()) {
+            file.write(reinterpret_cast<const char*>(bitmap.data()), bitmap.size());
+            file.close();
+        } else {
+            std::cerr << "cannot open file: " << filename << " ." << std::endl;
+        }
+        
+        std::string command;
+        command = "zstd -f " + indexfilename;
+        std::cout << "Executing command: " << command << std::endl;
+        int result = std::system(command.c_str());
+        if (result == 0) {
+            
+            std::cout << "Compression successful." << std::endl;
+        } else {
+            std::cout << "Compression failed." << std::endl;
+        }
+
+        std::ofstream file1(editsfilename, std::ios::binary | std::ios::out);
+        if (file1.is_open()) {
+            file1.write(reinterpret_cast<const char*>(edits.data()), edits.size()*sizeof(double));
+            file1.close();
+        } else {
+            std::cerr << "cannot open file: " << filename << " ." << std::endl;
+        }
+        
+        
+        command = "zstd -f " + editsfilename;
+        std::cout << "Executing command: " << command << std::endl;
+        result = std::system(command.c_str());
+        if (result == 0) {
+            
+            std::cout << "Compression successful." << std::endl;
+        } else {
+            std::cout << "Compression failed." << std::endl;
+        }
+       
+
+    
+        
+        std::uintmax_t compressed_indexSize = std::filesystem::file_size(compressedindex);
+        std::uintmax_t compressed_editSize =std::filesystem::file_size(compressededits);
+        std::uintmax_t original_indexSize = std::filesystem::file_size(indexfilename);
+        std::uintmax_t original_editSize = std::filesystem::file_size(editsfilename);
+        std::uintmax_t original_dataSize = std::filesystem::file_size(file_path);
+        std::uintmax_t compressed_dataSize = cmpSize;
+        std::cout<<"compressed datasize:"<<cmpSize<<std::endl;
+
+        double overall_ratio = double(original_dataSize)/(compressed_dataSize+compressed_editSize+compressed_indexSize);
+    
+        double bitRate = 64/overall_ratio; 
+
+        double psnr = calculatePSNR(input_data, decp_data_copy, maxValue-minValue);
+        double fixed_psnr = calculatePSNR(input_data, decp_data, maxValue-minValue);
+
+        std::ofstream outFile3("./stat_result/result_"+filename+"_"+compressor_id+"_detailed_additional_time.txt", std::ios::app);
+
+        
+        if (!outFile3) {
+            std::cerr << "Unable to open file for writing." << std::endl;
+            return; // 返回错误码
+        }
+
+        
+        outFile3 << std::to_string(bound)<<":" << std::endl;
+        outFile3 << std::setprecision(17)<< "related_error: "<<er << std::endl;
+        outFile3 << std::setprecision(17)<< "OCR: "<<overall_ratio << std::endl;
+        outFile3 <<std::setprecision(17)<< "CR: "<<double(original_dataSize)/compressed_dataSize << std::endl;
+        outFile3 << std::setprecision(17)<<"OBR: "<<bitRate << std::endl;
+        outFile3 << std::setprecision(17)<<"BR: "<< 64/(double(original_indexSize)/compressed_dataSize) << std::endl;
+        outFile3 << std::setprecision(17)<<"psnr: "<<psnr << std::endl;
+        outFile3 << std::setprecision(17)<<"fixed_psnr: "<<fixed_psnr << std::endl;
+        
+
+        
+        outFile3 << std::setprecision(17)<<"edit_ratio: "<<ratio << std::endl;
+        outFile3 << std::setprecision(17)<<"compression_time: "<<compression_time<< std::endl;
+        outFile3 << std::setprecision(17)<<"additional_time: "<<additional_time<< std::endl;
+        outFile3 << "\n" << std::endl;
+
+        outFile3.close();
+
+        std::cout << "Variables have been appended to output.txt" << std::endl;
+        return;
+    };
+
+    std::string extractFilename(const std::string& path) {
+    
+        size_t lastSlash = path.find_last_of("/\\");
+        std::string filename = (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
+
+        size_t dotPos = filename.find_last_of('.');
+        std::string name = (dotPos == std::string::npos) ? filename : filename.substr(0, dotPos);
+
+        return name;
+    };
 
     void mappath(int* DS_M, int* AS_M, const double* offset){
         int h_un_sign_as = num_Elements;
@@ -573,8 +751,8 @@ extern "C" {
         
         std::vector<UnionFind> lowerSeeds(lowerStar.size());
         std::vector<UnionFind> upperSeeds(upperStar.size());
-        std::vector<UnionFind *> lowerList(lowerStar.size());
-        std::vector<UnionFind *> upperList(upperStar.size());
+        std::vector<UnionFind*> lowerList(lowerStar.size());
+        std::vector<UnionFind*> upperList(upperStar.size());
 
         std::vector<int> lowerNeighbors, upperNeighbors;
         upperNeighbors = upperStar;
@@ -587,6 +765,8 @@ extern "C" {
         
         std::vector<int> tr;
         tr = vertex_cells[vertexId];
+
+
         int const vertexStarSize = tr.size();
         
         for(int i = 0; i < vertexStarSize; i++) {
@@ -602,39 +782,39 @@ extern "C" {
                 bool const lower0 = heightMap[neighborId0] < currentHeight || (heightMap[neighborId0] == currentHeight and neighborId0<vertexId);
                 // connect it to everybody except himself and vertexId
                 for(int k = j + 1; k < cellSize; k++) {
-                int neighborId1 = vertices[k];
-                if((neighborId1 != neighborId0) && (neighborId1 != vertexId)) {
-                    
-                    bool const lower1 = heightMap[neighborId1] < currentHeight || (heightMap[neighborId1] == currentHeight and neighborId1<vertexId);
+                    int neighborId1 = vertices[k];
+                    if((neighborId1 != neighborId0) && (neighborId1 != vertexId)) {
+                        
+                        bool const lower1 = heightMap[neighborId1] < currentHeight || (heightMap[neighborId1] == currentHeight and neighborId1<vertexId);
 
-                    std::vector<int> *neighbors = &lowerNeighbors;
-                    std::vector<UnionFind *> *seeds = &lowerList;
+                        std::vector<int> *neighbors = &lowerNeighbors;
+                        std::vector<UnionFind *> *seeds = &lowerList;
 
-                    if(!lower0) {
-                        neighbors = &upperNeighbors;
-                        seeds = &upperList;
-                    }
-
-                    if(lower0 == lower1) {
-                        // connect their union-find sets!
-                        int lowerId0 = -1, lowerId1 = -1;
-                        for(int l = 0; l < (int)neighbors->size(); l++) {
-                            if((*neighbors)[l] == neighborId0) {
-                                
-                                lowerId0 = l;
-                            }
-                            if((*neighbors)[l] == neighborId1) {
-                                lowerId1 = l;
-                            }
+                        if(!lower0) {
+                            neighbors = &upperNeighbors;
+                            seeds = &upperList;
                         }
-                        if((lowerId0 != -1) && (lowerId1 != -1)) {
-                            // if(vertexId == 0) cout<<lowerId0<<", "<<lowerId1<<endl;
-                            (*seeds)[lowerId0] = UnionFind::makeUnion(
-                                (*seeds)[lowerId0], (*seeds)[lowerId1]);
-                                (*seeds)[lowerId1] = (*seeds)[lowerId0];
+
+                        if(lower0 == lower1) {
+                            // connect their union-find sets!
+                            int lowerId0 = -1, lowerId1 = -1;
+                            for(int l = 0; l < (int)neighbors->size(); l++) {
+                                if((*neighbors)[l] == neighborId0) {
+                                    
+                                    lowerId0 = l;
+                                }
+                                if((*neighbors)[l] == neighborId1) {
+                                    lowerId1 = l;
+                                }
                             }
+                            if((lowerId0 != -1) && (lowerId1 != -1)) {
+                                // if(vertexId == 0) cout<<lowerId0<<", "<<lowerId1<<endl;
+                                (*seeds)[lowerId0] = UnionFind::makeUnion(
+                                    (*seeds)[lowerId0], (*seeds)[lowerId1]);
+                                    (*seeds)[lowerId1] = (*seeds)[lowerId0];
+                                }
+                        }
                     }
-                }
                 }
             }
         };
@@ -710,6 +890,201 @@ extern "C" {
         return 5;
     }
 
+    int calculateNeighborIndex(int nx, int ny, int nz){
+        for(int i = 0; i<maxNeighbors; i++){
+            if(nx == neighborOffsets[i][0] && ny == neighborOffsets[i][1] && nz == neighborOffsets[i][2]) return i;
+        }
+        return -1;
+    }
+
+    
+
+    int calculateLUT(const double* heightMap, int i, int type=0) {
+        const int tableSize = 1 << 14;
+        for(int config = 0; config<tableSize;config++){
+
+            std::bitset<14> binary(config); 
+            if(config<10) std::cout<<binary<<std::endl;
+            std::vector<std::vector<int>> *upperComponents = nullptr;
+            std::vector<std::vector<int>> *lowerComponents = nullptr;
+
+            std::vector<std::vector<int>> localUpperComponents;
+            std::vector<std::vector<int>> localLowerComponents;
+            if(upperComponents == nullptr) {
+                upperComponents = &localUpperComponents;
+            }
+            if(lowerComponents == nullptr) {
+                lowerComponents = &localLowerComponents;
+            }
+            
+            std::vector<int > lowerStar, upperStar;
+            int vertexId = i;
+            int y = (i / (width)) % height; // Get the x coordinate
+            int x = i % width; // Get the y coordinate
+            int z = (i / (width * height)) % depth;
+            
+        
+            for (int d =0;d<maxNeighbors;d++) {
+                if(adjacency[vertexId*maxNeighbors+d]==-1) continue;
+                int r = adjacency[i*maxNeighbors+d];
+                
+                if (binary[d]==0) {
+                    lowerStar.emplace_back(r);
+                } 
+                else{
+                    upperStar.emplace_back(r);
+                }
+            }
+            
+            std::vector<UnionFind> lowerSeeds(lowerStar.size());
+            std::vector<UnionFind> upperSeeds(upperStar.size());
+            std::vector<UnionFind*> lowerList(lowerStar.size());
+            std::vector<UnionFind*> upperList(upperStar.size());
+
+            std::vector<int> lowerNeighbors, upperNeighbors;
+            upperNeighbors = upperStar;
+            lowerNeighbors = lowerStar;
+        
+            for(int i = 0; i < (int)lowerList.size(); i++)
+                lowerList[i] = &(lowerSeeds[i]);
+            for(int i = 0; i < (int)upperList.size(); i++)
+                upperList[i] = &(upperSeeds[i]);
+            
+            std::vector<int> tr;
+            tr = vertex_cells[vertexId];
+
+
+            int const vertexStarSize = tr.size();
+            
+            for(int i = 0; i < vertexStarSize; i++) {
+                int cellId = tr[i];
+                int const cellSize = 3;
+                int v1, v2, v3;
+                getVerticesFromTriangleID1(cellId,  v1, v2, v3);
+                std::vector<int> vertices{v1, v2, v3};
+                for(int j = 0; j < cellSize; j++) {
+
+                int neighborId0 = vertices[j];
+                
+                if(neighborId0 == vertexId) continue;
+                int nx = neighborId0 % width;
+                int ny = (neighborId0 / width) % height;
+                int nz = (neighborId0 / (width * height)) % depth;
+                int idx = calculateNeighborIndex(nx - x, ny - y, nz -z);
+                if(idx == -1) std::cout<<"wrong1" <<std::endl;
+                    bool const lower0 = binary[idx] == 0;
+                    // connect it to everybody except himself and vertexId
+                    for(int k = j + 1; k < cellSize; k++) {
+                        int neighborId1 = vertices[k];
+                        if((neighborId1 != neighborId0) && (neighborId1 != vertexId)) {
+                            int nx = neighborId1 % width;
+                            int ny = (neighborId1 / width) % height;
+                            int nz = (neighborId1 / (width * height)) % depth;
+                            int idx = calculateNeighborIndex(nx - x, ny - y, nz - z);
+                            if(idx == -1) std::cout<<"wrong" <<std::endl;
+                            bool const lower1 = binary[idx] == 0;
+
+                            std::vector<int> *neighbors = &lowerNeighbors;
+                            std::vector<UnionFind *> *seeds = &lowerList;
+
+                            if(!lower0) {
+                                neighbors = &upperNeighbors;
+                                seeds = &upperList;
+                            }
+
+                            if(lower0 == lower1) {
+                                // connect their union-find sets!
+                                int lowerId0 = -1, lowerId1 = -1;
+                                for(int l = 0; l < (int)neighbors->size(); l++) {
+                                    if((*neighbors)[l] == neighborId0) {
+                                        
+                                        lowerId0 = l;
+                                    }
+                                    if((*neighbors)[l] == neighborId1) {
+                                        lowerId1 = l;
+                                    }
+                                }
+                                if((lowerId0 != -1) && (lowerId1 != -1)) {
+                                    // if(vertexId == 0) cout<<lowerId0<<", "<<lowerId1<<endl;
+                                    (*seeds)[lowerId0] = UnionFind::makeUnion(
+                                        (*seeds)[lowerId0], (*seeds)[lowerId1]);
+                                        (*seeds)[lowerId1] = (*seeds)[lowerId0];
+                                    }
+                            }
+                        }
+                    }
+                }
+            };
+
+            
+            // update the UF if necessary
+            for(int i = 0; i < (int)lowerList.size(); i++)
+                lowerList[i] = lowerList[i]->find();
+            for(int i = 0; i < (int)upperList.size(); i++)
+            {
+                upperList[i] = upperList[i]->find();
+            }
+                
+
+            std::unordered_map<UnionFind *, std::vector<int>>::iterator it;
+            std::unordered_map<UnionFind *, std::vector<int>>
+                upperComponentId{};
+            std::unordered_map<UnionFind *, std::vector<int>>
+                lowerComponentId{};
+            // We retrieve the lower and upper components if we want them
+            for(int i = 0; i < (int)upperNeighbors.size(); i++) {
+                
+                it = upperComponentId.find(upperList[i]);
+                if(it != upperComponentId.end()) {
+                    upperComponentId[upperList[i]].push_back(upperNeighbors[i]);
+                } else {
+                upperComponentId[upperList[i]]
+                    = std::vector<int>(1, upperNeighbors[i]);
+                }
+            }
+
+            
+            for(auto elt : upperComponentId) {
+                upperComponents->push_back(std::vector<int>());
+                
+                for(int i = 0; i < (int)elt.second.size(); i++) {
+                    upperComponents->back().push_back(elt.second.at(i));
+                }
+            }
+        
+            
+
+            for(int i = 0; i < (int)lowerNeighbors.size(); i++) {
+                it = lowerComponentId.find(lowerList[i]);
+                if(it != lowerComponentId.end()) {
+                    lowerComponentId[lowerList[i]].push_back(lowerNeighbors[i]);
+                } else {
+                lowerComponentId[lowerList[i]]
+                    = std::vector<int>(1, lowerNeighbors[i]);
+                }
+            }
+
+            for(auto elt : lowerComponentId) {
+                lowerComponents->push_back(std::vector<int>());
+                for(int i = 0; i < (int)elt.second.size(); i++) {
+                    lowerComponents->back().push_back(elt.second.at(i));
+                }
+            }
+            
+            int lowerComponentNumber = lowerComponents->size();
+            int upperComponentNumber = upperComponents->size();
+
+            // minimum: 0 1-saddle: 1, 2-saddle: 2, regular: 5 maximum: 4;
+            if(lowerComponentNumber == 0 && upperComponentNumber == 1) LUT[config]=0;
+            else if(lowerComponentNumber == 1 && upperComponentNumber == 0) LUT[config]=4;
+            else if(lowerComponentNumber == 1 && upperComponentNumber == 1) LUT[config]=5;
+            else if(lowerComponentNumber > 1 && upperComponentNumber > 1) LUT[config]=3;
+            else if(lowerComponentNumber > 1) LUT[config]=1;
+            else if(upperComponentNumber > 1) LUT[config]=2;
+        }      
+    }
+    
+
     void classifyAllVertices(int *vertex_type_tmp, const double* heightMap, 
                              int *lowerStars, int *upperStars,
                              int type=0) {
@@ -725,7 +1100,7 @@ extern "C" {
         #pragma omp parallel for
         for(int tid = 0; tid < num_Elements; tid++){
             d_deltaBuffer[tid] = -4.0 * bound;
-            delta_counter[tid] = 0;
+            // delta_counter[tid] = 0;
         }    
     }
 
@@ -1589,7 +1964,6 @@ extern "C" {
                 }
             }
 
-            // 合并结果
             #pragma omp critical
             {
                 saddles2.insert(saddles2.end(), local_saddles2.begin(), local_saddles2.end());
@@ -2439,7 +2813,7 @@ extern "C" {
         double tmp_true_value = decp_data[true_index];
         double tmp_false_value = decp_data[false_index];
         if(tmp_true_value > tmp_false_value || (tmp_true_value == tmp_false_value && true_index > false_index)) return;
-        if(type == "split"){
+        if(direction == 0){
             double d = (input_data[false_index] - bound + decp_data[false_index])/2.0 - decp_data[false_index];
             double oldValue = d_deltaBuffer[false_index];
             if (d > oldValue) {
@@ -2521,7 +2895,7 @@ extern "C" {
             int true_index = wrong_rank_saddle_index[i*2];
             int false_index = wrong_rank_saddle_index[i*2+1];
             
-            fix_wrong_index_saddle(true_index, false_index, 1, type);
+            fix_wrong_index_saddle(true_index, false_index, 0, type);
         }
         apply_delta(type);
     }
@@ -2533,8 +2907,8 @@ extern "C" {
         for(int i = 0; i < wrong_saddle_counter_join; i++)
         {
             
-            int true_index = wrong_rank_saddle_index[i*2];
-            int false_index = wrong_rank_saddle_index[i*2+1];
+            int true_index = wrong_rank_saddle_join_index[i*2];
+            int false_index = wrong_rank_saddle_join_index[i*2+1];
             
             fix_wrong_index_saddle(true_index, false_index, 1, type);
         }

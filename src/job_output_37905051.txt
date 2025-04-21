@@ -1,0 +1,8 @@
+Rank 0: total_elements = 287496, device_flags = 0x7fd6f3a00000
+[Rank 0] Gathered global DS_M results:
+Rank 0: total_elements = 287496, device_flags = 0x7f016fa00000
+[Rank 0] Gathered global DS_M results:
+Rank 0: total_elements = 287496, device_flags = 0x7f6d4ba00000
+[Rank 0] Gathered global DS_M results:
+Rank 0: total_elements = 287496, device_flags = 0x7f189fa00000
+[Rank 0] Gathered global DS_M results:
