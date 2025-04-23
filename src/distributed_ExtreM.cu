@@ -9,10 +9,11 @@
 #include <set>
 #include <vector>
 #include <algorithm>
-
+#include <map>
+#include <unordered_map>
 #define WIDTH  64
 #define HEIGHT 64
-#define DEPTH  64
+#define DEPTH  1
 #define GHOST 1
 // nvcc -ccbin mpicxx -std=c++17 distributed_ExtreM.cu -o ExtreM_distributed -lzstd
 // srun --gpu-bind=closest --gpus-per-task=1 -n 4 ./ExtreM_distributed
@@ -229,12 +230,34 @@ __global__ void GhostPathCompression(GhostRequest* DS_M, int total_elements, int
 }
 
 
+// __global__ void IndexGhostVertices(
+//     int* ghost_indices, int* ghost_counter,
+//     int padded_x, int padded_y, int padded_z,
+//     int GHOST){
+//     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+//     int total = padded_x * padded_y * padded_z;
+//     if (idx >= total) return;
+
+//     int px = idx % padded_x;
+//     int py = (idx / padded_x) % padded_y;
+//     int pz = idx / (padded_x * padded_y);
+
+//     // Check if this point is in ghost layer
+//     if (px < GHOST || px >= padded_x - GHOST ||
+//         py < GHOST || py >= padded_y - GHOST ||
+//         pz < GHOST || pz >= padded_z - GHOST)
+//     {
+//         int gid = atomicAdd(ghost_counter, 1);
+//         ghost_indices[gid] = idx;  // or store px,py,pz if you prefer
+//     }
+// }
+
 
 __global__ void MarkGhostDependencies(int* DS_M, int* output_gid_array,
     int padded_x, int padded_y, int padded_z,
     int global_offset_x, int global_offset_y, int global_offset_z,
     int local_gx_min, int local_gy_min, int local_gz_min,
-    int local_gx_max, int local_gy_max, int local_gz_max) {
+    int local_gx_max, int local_gy_max, int local_gz_max, int rank) {
 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int total = padded_x * padded_y * padded_z;
@@ -248,19 +271,41 @@ __global__ void MarkGhostDependencies(int* DS_M, int* output_gid_array,
         py < GHOST || py >= padded_y - GHOST ||
         pz < GHOST || pz >= padded_z - GHOST)
         return; // only core region
+    
 
     int target_gid = DS_M[i];
-    int tx = target_gid % WIDTH;
-    int ty = (target_gid / WIDTH) % HEIGHT;
-    int tz = target_gid / (WIDTH * HEIGHT);
+    // if(rank == 0) printf("%d %d\n", target_gid, padded_x * padded_y *padded_z);
+    int tx = target_gid % padded_x;
+    int ty = (target_gid / padded_x) % padded_y;
+    int tz = target_gid / (padded_x * padded_y);
+    
+    int px1 = tx ;
+    int py1 = ty ;
+    int pz1 = tz ;
 
-    if (tx < local_gx_min || tx >= local_gx_max ||
-        ty < local_gy_min || ty >= local_gy_max ||
-        tz < local_gz_min || tz >= local_gz_max) {
-        output_gid_array[i] = tx + global_offset_x + (ty + global_offset_y) * WIDTH + (tz + global_offset_z) * WIDTH * HEIGHT;  // mark ghost dependency
-    } else {
-        output_gid_array[i] = -1;
-    }
+    int gx = tx + global_offset_x;
+    int gy = ty + global_offset_y;
+    int gz = tz + global_offset_z;
+
+    int local_id = -1;
+    // front face
+    if(pz1 == 0) local_id = px1 + py1 * padded_x;
+    // back face
+    else if(pz1 == padded_z - GHOST) local_id = padded_x * padded_y + px1 + py1 * padded_x;
+    // top face
+    else if(py1 == 0) local_id = 2 * padded_x * padded_y + px + (pz1 - 1) * padded_x;
+    // bottom face
+    else if(py1 == padded_y - GHOST) local_id = 2 * padded_x * padded_y + padded_x * (padded_z - 2) + px + (pz1 - 1) * padded_x;
+    else if(px1 == 0) local_id = 2 * padded_x * padded_y + 2 * padded_x * (padded_z - 2) + (pz1 - 1) * (py1 - 1) + pz1 - 1;
+    else if(px1 == padded_x - GHOST) local_id =  2 * padded_x * padded_y + 2 * padded_x * (padded_z - 2) + (padded_y - 1) * (padded_z - 1) + (pz1 - 1) * (py1 - 1) + pz1 - 1;
+
+    if (px1 < GHOST || px1 >= padded_x - GHOST ||
+        py1 < GHOST || py1 >= padded_y - GHOST ||
+        pz1 < GHOST || pz1 >= padded_z - GHOST) {
+        int g_id = gx + (gy) * WIDTH + (gz) * WIDTH * HEIGHT;
+        // if(rank == 0 && pz1 == 0) printf("%d: %d %d %d %d %d %d %d %d %d, gid: %d\n", target_gid, tx, ty, tz, gx, gy, gz, g_id);
+        output_gid_array[local_id] = g_id;  // mark ghost dependency
+    } 
 }
 
 void gather_ghost_flags_to_rank0(int* device_flags, int total_elements, int rank, int size, int* gathered_flags_root) {
@@ -399,7 +444,7 @@ __device__ int get_owner_rank_gpu(int gid, int width, int height, int depth,
 
 __global__ void build_requests_kernel(const int* ghost_flags, GhostRequest* output,
     int* request_offsets, int width, int height, int depth,
-    int px, int py, int pz, int* dims, int total_elements) {
+    int px, int py, int pz, int* dims, int total_elements, int max_per_rank) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= total_elements) return;
 
@@ -408,14 +453,15 @@ __global__ void build_requests_kernel(const int* ghost_flags, GhostRequest* outp
 
     int rank = get_owner_rank_gpu(gid, width, height, depth, px, py, pz, dims);
     int offset = atomicAdd(&request_offsets[rank], 1);
-    output[rank * 1024 + offset] = {gid, -1}; // 1024 = max per rank
+    output[rank * max_per_rank + offset] = {gid, -1}; // 1024 = max per rank
 }
 
 void exchange_ghosts_cuda(const std::map<int, GhostRequest*>& device_requests_to_send,
     const std::map<int, int>& send_counts,
     MPI_Comm cart_comm,
     std::vector<GhostRequest*>& device_received_buffers,
-    std::vector<int>& recv_counts) {
+    std::vector<int>& recv_counts, int max_expected) {
+
         int rank;
         MPI_Comm_rank(cart_comm, &rank);
         std::vector<int> neighbors = get_cartesian_neighbors(cart_comm, rank);
@@ -424,7 +470,7 @@ void exchange_ghosts_cuda(const std::map<int, GhostRequest*>& device_requests_to
         device_received_buffers.resize(neighbors.size());
         recv_counts.resize(neighbors.size());
 
-        const int max_expected = 1024;  // upper bound for recv count (adjustable)
+        
 
         for (size_t i = 0; i < neighbors.size(); ++i) {
             int nbr = neighbors[i];
@@ -446,6 +492,19 @@ void exchange_ghosts_cuda(const std::map<int, GhostRequest*>& device_requests_to
                 GhostRequest* send_buf = it->second;
                 int count = send_counts.at(nbr);
                 send_requests.emplace_back();
+                printf("Rank %d → %d | send_buf=%p | count=%d\n", rank, nbr, send_buf, count);
+                cudaPointerAttributes attr;
+                cudaError_t err = cudaPointerGetAttributes(&attr, send_buf);
+
+                if (err != cudaSuccess) {
+                    printf("Rank %d → %d: cudaPointerGetAttributes failed: %s\n", rank, nbr, cudaGetErrorString(err));
+                } else {
+                    if (attr.type != cudaMemoryTypeDevice) {
+                        printf("Rank %d → %d: send_buf is NOT a device pointer!\n", rank, nbr);
+                    } else {
+                        printf("Rank %d → %d: send_buf is a valid device pointer.\n", rank, nbr);
+                    }
+                }
                 MPI_Isend(send_buf, count * sizeof(GhostRequest), MPI_BYTE,
                 nbr, 0, cart_comm, &send_requests.back());
             }
@@ -454,6 +513,102 @@ void exchange_ghosts_cuda(const std::map<int, GhostRequest*>& device_requests_to
         MPI_Waitall(send_requests.size(), send_requests.data(), MPI_STATUSES_IGNORE);
         MPI_Waitall(recv_requests.size(), recv_requests.data(), MPI_STATUSES_IGNORE);
 } // buffers are now available on GPU
+
+void exchange_fixed_device_flags(
+    int* device_send_buf,         // device_ghost_gid_flags, size = max_per_rank
+    int max_per_rank,             // fixed size to send/receive
+    MPI_Comm cart_comm,
+    const std::vector<int>& neighbors,
+    std::vector<int*>& device_recv_bufs // GPU pointers, one per neighbor
+) {
+    std::vector<MPI_Request> send_requests, recv_requests;
+
+    device_recv_bufs.resize(neighbors.size());
+
+    for (size_t i = 0; i < neighbors.size(); ++i) {
+        int nbr = neighbors[i];
+
+        // Allocate receive buffer on GPU
+        cudaMalloc(&device_recv_bufs[i], max_per_rank * sizeof(int));
+
+        // Post Irecv to receive from neighbor
+        recv_requests.emplace_back();
+        MPI_Irecv(device_recv_bufs[i], max_per_rank, MPI_INT,
+                  nbr, 0, cart_comm, &recv_requests.back());
+
+        // Post Isend — same buffer sent to all neighbors
+        send_requests.emplace_back();
+        MPI_Isend(device_send_buf, max_per_rank, MPI_INT,
+                  nbr, 0, cart_comm, &send_requests.back());
+    }
+
+    // Wait for all to finish
+    MPI_Waitall(send_requests.size(), send_requests.data(), MPI_STATUSES_IGNORE);
+    MPI_Waitall(recv_requests.size(), recv_requests.data(), MPI_STATUSES_IGNORE);
+}
+
+__global__ void group_gids_by_neighbor(
+    const int* gids, int num_gids,
+    int** neighbor_bufs, int* neighbor_counts,  // per-rank buffers + counters
+    int width, int height, int depth,
+    int px, int py, int pz, int rank, int max_per_rank
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (i >= num_gids || gids[i] == -1) return;
+
+    int gid = gids[i];
+
+    // 转换为全局坐标
+    int gx = gid % width;
+    int gy = (gid / width) % height;
+    int gz = (gid / (width * height)) % depth;
+
+    // 判断属于哪个 rank
+    int block_x = width / px;
+    int block_y = height / py;
+    int block_z = depth / pz;
+
+    int cx = gx / block_x;
+    int cy = gy / block_y;
+    int cz = gz / block_z;
+
+    int neighbor_rank = cx + cy * px + cz * px * py;
+    
+    // 写入对应 buffer（atomic 确保线程安全）
+    if(neighbor_rank >= 4) printf("%d %d %d %d %d %d %d %d\n", gid, neighbor_rank, px, py, pz, cx, cy, cz);
+    int offset = atomicAdd(&neighbor_counts[neighbor_rank], 1);
+    int* buf = neighbor_bufs[neighbor_rank];
+    buf[offset] = gid;
+}
+
+__global__ void resolve_requested_targets(
+    int* recv_buf, int num_requests,
+    const int* device_DS_M,
+    int global_offset_x, int global_offset_y, int global_offset_z,
+    int padded_x, int padded_y, int padded_z,
+    int width, int height, int depth, int rank
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_requests || recv_buf[i] == -1 || recv_buf[i] == 0 ) return;
+
+    int gid = recv_buf[i];
+
+    int gx = gid % width;
+    int gy = (gid / width) % height;
+    int gz = (gid / (width * height)) % depth;
+
+    int lx = gx - global_offset_x + GHOST;
+    int ly = gy - global_offset_y + GHOST;
+    int lz = gz - global_offset_z + GHOST;
+
+    int lid = lx + ly * padded_x + lz * padded_x * padded_y;
+    if(rank == 0) printf("%d %d\n", lid, gid);
+    recv_buf[i] = device_DS_M[lid];
+}
+
+
+
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
@@ -471,6 +626,8 @@ int main(int argc, char** argv) {
     MPI_Cart_coords(cart_comm, rank, 3, coords);
 
     int px = dims[0], py = dims[1], pz = dims[2];
+    printf("%d %d %d\n", px, py, pz);
+    // return 0;
     int cx = coords[0], cy = coords[1], cz = coords[2];
 
     int local_x = WIDTH / px;
@@ -524,21 +681,24 @@ int main(int argc, char** argv) {
     }
 
     exchange_extended_ghost_layers(local_host, padded_x, padded_y, padded_z, local_x, local_y, local_z, cart_comm, rank);
-
     
 
     cudaMalloc(&device_input, local_bytes);
     
     cudaMemcpy(device_input, local_host, local_bytes, cudaMemcpyHostToDevice);
 
-    dim3 block(8, 8, 4);
+    dim3 block(8, 8, 8);
     dim3 grid((padded_x + block.x - 1) / block.x,
               (padded_y + block.y - 1) / block.y,
               (padded_z + block.z - 1) / block.z);
 
-    int global_offset_x = cx * local_x;
-    int global_offset_y = cy * local_y;
-    int global_offset_z = cz * local_z;
+    int global_offset_x = cx * (local_x);
+    int global_offset_y = cy * (local_y);
+    int global_offset_z = cz * (local_z);
+
+    // printf("%d: %d %d %d\n", rank, global_offset_x, global_offset_y, global_offset_z);
+
+
 
     int local_gx_min = global_offset_x;
     int local_gy_min = global_offset_y;
@@ -567,7 +727,7 @@ int main(int argc, char** argv) {
         printf("Rank %d: cudaMalloc failed compute direction: %s\n", rank, cudaGetErrorString(err));
         MPI_Abort(MPI_COMM_WORLD, -1);
     }
-
+    
     int blockSize = 256;
     int gridSize = (total_elements + blockSize - 1) / blockSize;
     PathCompression<<<gridSize, blockSize>>>(device_DS_M, total_elements);
@@ -578,34 +738,156 @@ int main(int argc, char** argv) {
     }
     cudaDeviceSynchronize();
 
+    int max_per_rank = padded_x * padded_y * padded_z - local_x * local_y * local_z;
+
     int *device_ghost_gid_flags;
-    err = cudaMalloc(&device_ghost_gid_flags, total_elements * sizeof(int));
+    err = cudaMalloc(&device_ghost_gid_flags,  max_per_rank * sizeof(int));
+    cudaMemset(device_ghost_gid_flags,  -1, max_per_rank * sizeof(int));
     if (err != cudaSuccess) {
         printf("Rank %d: cudaMalloc failed: %s\n", rank, cudaGetErrorString(err));
         MPI_Abort(MPI_COMM_WORLD, -1);
     }
     cudaDeviceSynchronize();
 
+    // int ghost_count = padded_x * padded_y * padded_z - local_x * local_y * local_z;
+
+    // int* device_ghost_indices;
+    // int* device_ghost_counter;
+    // cudaMalloc(&device_ghost_indices, ghost_count * sizeof(int));
+    // cudaMalloc(&device_ghost_counter, sizeof(int));
+    // cudaMemset(device_ghost_counter, 0, sizeof(int));
+
+    
+
+    // IndexGhostVertices<<<gridSize, blockSize>>>(
+    //     device_ghost_indices, device_ghost_counter,
+    //     padded_x, padded_y, padded_z, GHOST);
+    
+    // cudaDeviceSynchronize();
+
     MarkGhostDependencies<<<gridSize, blockSize>>>(
         device_DS_M, device_ghost_gid_flags,
         padded_x, padded_y, padded_z,
         global_offset_x, global_offset_y, global_offset_z,
         local_gx_min, local_gy_min, local_gz_min,
-        local_gx_max, local_gy_max, local_gz_max);
-    cudaDeviceSynchronize();
+        local_gx_max, local_gy_max, local_gz_max, rank);
+    err = cudaDeviceSynchronize();
 
-    int* gathered_flags_root = nullptr;
-    if (rank == 0) {
-        gathered_flags_root = (int*) malloc(size * total_elements * sizeof(int));
-        if (!gathered_flags_root) {
-            fprintf(stderr, "malloc failed on rank 0\n");
-            MPI_Abort(MPI_COMM_WORLD, 1);
+    
+
+    if (err != cudaSuccess) {
+        printf("Rank %d: group before failed for recv_buf for neighbor %d: %s\n", rank, cudaGetErrorString(err));
+        MPI_Abort(MPI_COMM_WORLD, -1);
+    }
+    
+    
+    int** device_neighbor_bufs;
+    int* device_neighbor_counts;
+    int total_ranks = px * py * pz;
+
+    std::vector<int*> host_bufs(total_ranks);
+    for (int r = 0; r < total_ranks; ++r) {
+        cudaMalloc(&host_bufs[r], max_per_rank * sizeof(int));
+        // cudaMemset(host_bufs[r], -1, max_per_rank * sizeof(int));
+    }
+
+    cudaMalloc(&device_neighbor_bufs, total_ranks * sizeof(int*));
+    cudaMemcpy(device_neighbor_bufs, host_bufs.data(), total_ranks * sizeof(int*), cudaMemcpyHostToDevice);
+
+    cudaMalloc(&device_neighbor_counts, total_ranks * sizeof(int));
+    cudaMemset(device_neighbor_counts, 0, total_ranks * sizeof(int));
+    
+    int threads = 256;
+    int blocks = (max_per_rank + threads - 1) / threads;
+    group_gids_by_neighbor<<<blocks, threads>>>(
+        device_ghost_gid_flags, max_per_rank,
+        device_neighbor_bufs, device_neighbor_counts,
+        width, height, depth, px, py, pz, rank, max_per_rank
+    );
+
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        printf("Rank %d: group failed for recv_buf for neighbor %d: %s\n", rank, cudaGetErrorString(err));
+        MPI_Abort(MPI_COMM_WORLD, -1);
+    }
+    
+    std::vector<int> neighbors = get_cartesian_neighbors(cart_comm, rank);
+    std::vector<MPI_Request> send_reqs, recv_reqs;
+    std::unordered_map<int, int*> device_recv_bufs;
+    
+    for (int r : neighbors) {
+        
+        int* recv_buf;
+        
+        cudaError_t err = cudaMalloc(&recv_buf, max_per_rank * sizeof(int));
+        cudaMemset(recv_buf, -1, max_per_rank * sizeof(int));
+        if (err != cudaSuccess) {
+            printf("Rank %d: cudaMalloc failed for recv_buf for neighbor %d: %s\n", rank, r, cudaGetErrorString(err));
+            MPI_Abort(MPI_COMM_WORLD, -1);
+        }
+        device_recv_bufs[r] = recv_buf;
+        
+        // recv 先发
+        recv_reqs.emplace_back();
+        MPI_Irecv(recv_buf, max_per_rank, MPI_INT, r, 0, cart_comm, &recv_reqs.back());
+        
+        // send 后发
+        send_reqs.emplace_back();
+        MPI_Isend(host_bufs[r], max_per_rank, MPI_INT, r, 0, cart_comm, &send_reqs.back());
+    }
+
+    MPI_Waitall(send_reqs.size(), send_reqs.data(), MPI_STATUSES_IGNORE);
+    MPI_Waitall(recv_reqs.size(), recv_reqs.data(), MPI_STATUSES_IGNORE);
+
+    // std::vector<int> temp_recv(max_per_rank);  // host buffer
+    
+    // for (int r : neighbors) {
+    //     int* recv_buf = device_recv_bufs[r];  // GPU 上每个 neighbor 的 recv buffer
+
+    //     cudaMemcpy(temp_recv.data(), recv_buf, max_per_rank * sizeof(int), cudaMemcpyDeviceToHost);
+
+    //     printf("Rank %d received from neighbor %d:\n", rank, r);
+    //     for (int i = 0; i < max_per_rank; ++i) {
+    //         if(temp_recv[i] != -1 &&temp_recv[i] != 0 ) printf("  [%d] = %d\n", i, temp_recv[i]);
+    //     }
+
+        
+    // }
+
+    for (int r : neighbors) {
+        int* recv_buf = device_recv_bufs[r];       // 来自 neighbor 的请求
+        // int* response_buf;  
+        // cudaMalloc(&response_buf, max_per_rank * sizeof(int));
+        // device_response_bufs[ni] = response_buf;
+    
+        int threads = 256;
+        int blocks = (max_per_rank + threads - 1) / threads;
+    
+        resolve_requested_targets<<<blocks, threads>>>(
+            recv_buf,
+            max_per_rank,
+            device_DS_M,
+            global_offset_x, global_offset_y, global_offset_z,
+            padded_x, padded_y, padded_z,
+            width, height, depth, rank
+        );
+
+        err = cudaDeviceSynchronize();
+
+        if (err != cudaSuccess) {
+            // printf("Rank %d: group after failed for recv_buf for neighbor %s\n", rank, cudaGetErrorString(err));
+            MPI_Abort(MPI_COMM_WORLD, -1);
         }
     }
 
-    int total_ranks = px * py * pz;
+    
+    return 0;
+
+    
+
+    
     GhostRequest* device_requests;
-    cudaMalloc(&device_requests, total_ranks * 1024 * sizeof(GhostRequest)); // max 1024 per rank
+    cudaMalloc(&device_requests, total_ranks * max_per_rank * sizeof(GhostRequest)); // max 1024 per rank
 
     int* device_request_offsets;
     cudaMalloc(&device_request_offsets, total_ranks * sizeof(int));
@@ -618,33 +900,33 @@ int main(int argc, char** argv) {
 
 
     cudaDeviceSynchronize();
-      
-    int threads = 256;
-    int blocks = (total_elements + threads - 1) / threads;
+   
+
 
     build_requests_kernel<<<blocks, threads>>>(
         device_ghost_gid_flags, device_requests, device_request_offsets,
-        width, height, depth, px, py, pz, device_dims, total_elements);
+        width, height, depth, px, py, pz, device_dims, total_elements, max_per_rank);
     cudaDeviceSynchronize();
-
+    
+    
     std::map<int, GhostRequest*> device_requests_to_send;
     std::map<int, int> send_counts;
 
     std::vector<int> host_offsets(total_ranks);
     cudaMemcpy(host_offsets.data(), device_request_offsets, total_ranks * sizeof(int), cudaMemcpyDeviceToHost);
-
+    
     for (int r = 0; r < total_ranks; ++r) {
         if (host_offsets[r] > 0) {
-            device_requests_to_send[r] = device_requests + r * 1024;
+            device_requests_to_send[r] = device_requests + r * max_per_rank;
             send_counts[r] = host_offsets[r];
         }
     }
-
+    cudaDeviceSynchronize();
     std::vector<GhostRequest*> device_received_buffers;
     std::vector<int> recv_counts;
 
     exchange_ghosts_cuda(device_requests_to_send, send_counts, cart_comm,
-                        device_received_buffers, recv_counts);
+                        device_received_buffers, recv_counts, max_per_rank);
     
     cudaDeviceSynchronize();
     return 0;
